@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Reset Password - Klicktape</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #000000, #1a1a1a, #2a2a2a);
+            color: white;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            text-align: center;
+            max-width: 400px;
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            backdrop-filter: blur(10px);
+        }
+        .logo {
+            font-size: 32px;
+            font-weight: bold;
+            color: #FFD700;
+            margin-bottom: 20px;
+        }
+        .message {
+            font-size: 18px;
+            margin-bottom: 30px;
+            line-height: 1.5;
+        }
+        .token-display {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: left;
+            font-family: monospace;
+            word-break: break-all;
+        }
+        .error {
+            color: #ff6b6b;
+            margin-top: 20px;
+        }
+        .success {
+            color: #4ade80;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">Klicktape</div>
+        <div class="message">
+            Testing password reset token handling
+        </div>
+        
+        <div class="token-display">
+            <strong>Full URL:</strong><br>
+            <span id="full-url"></span>
+        </div>
+        
+        <div class="token-display">
+            <strong>Token Parameters:</strong><br>
+            <span id="token-params"></span>
+        </div>
+        
+        <div id="status-message" class="message"></div>
+    </div>
+
+    <script>
+        // Display the full URL
+        document.getElementById('full-url').textContent = window.location.href;
+        
+        // Parse URL parameters
+        function getUrlParams() {
+            // Supabase sends tokens in URL hash
+            const hashParams = new URLSearchParams(window.location.hash.substring(1));
+            // Also check query params as fallback
+            const queryParams = new URLSearchParams(window.location.search);
+
+            const params = {
+                access_token: hashParams.get('access_token') || queryParams.get('access_token'),
+                refresh_token: hashParams.get('refresh_token') || queryParams.get('refresh_token'),
+                error: hashParams.get('error') || queryParams.get('error'),
+                error_description: hashParams.get('error_description') || queryParams.get('error_description'),
+                type: hashParams.get('type') || queryParams.get('type'),
+                token: hashParams.get('token') || queryParams.get('token')
+            };
+            
+            return params;
+        }
+
+        const params = getUrlParams();
+        document.getElementById('token-params').textContent = JSON.stringify(params, null, 2);
+        
+        // Check if we have what we need
+        if (params.error) {
+            document.getElementById('status-message').innerHTML = `
+                <div class="error">
+                    <strong>Error:</strong> ${params.error}<br>
+                    ${params.error_description || ''}
+                </div>
+            `;
+        } else if (params.token && params.type === 'recovery') {
+            document.getElementById('status-message').innerHTML = `
+                <div class="success">
+                    <strong>Valid Recovery Token Found!</strong><br>
+                    This link should work to reset your password.
+                </div>
+            `;
+        } else if (params.access_token) {
+            document.getElementById('status-message').innerHTML = `
+                <div class="success">
+                    <strong>Access Token Found!</strong><br>
+                    This link should work to reset your password.
+                </div>
+            `;
+        } else {
+            document.getElementById('status-message').innerHTML = `
+                <div class="error">
+                    <strong>No Valid Token Found</strong><br>
+                    This link may be invalid or expired.
+                </div>
+            `;
+        }
+        
+        console.log('URL params:', params);
+    </script>
+</body>
+</html>

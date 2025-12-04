@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirm Your Account - Klicktape</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #000000, #1a1a1a, #2a2a2a);
+            color: white;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            text-align: center;
+            max-width: 450px;
+            width: 100%;
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        .logo {
+            font-size: 32px;
+            font-weight: bold;
+            color: #FFD700;
+            margin-bottom: 20px;
+        }
+        .title {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #ffffff;
+        }
+        .subtitle {
+            font-size: 16px;
+            margin-bottom: 30px;
+            line-height: 1.5;
+            color: #cccccc;
+        }
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #ffffff;
+        }
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+            box-sizing: border-box;
+        }
+        .form-input:focus {
+            outline: none;
+            border-color: #FFD700;
+        }
+        .form-input::placeholder {
+            color: rgba(255, 255, 255, 0.5);
+        }
+        .confirm-button {
+            width: 100%;
+            padding: 14px;
+            background: #FFD700;
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-top: 10px;
+        }
+        .confirm-button:hover {
+            background: #e6c200;
+        }
+        .confirm-button:disabled {
+            background: rgba(255, 215, 0, 0.5);
+            cursor: not-allowed;
+        }
+        .spinner {
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top: 2px solid #FFD700;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .error {
+            background: rgba(255, 0, 0, 0.1);
+            border: 1px solid rgba(255, 0, 0, 0.3);
+            color: #ff6b6b;
+            padding: 12px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .success {
+            background: rgba(0, 255, 0, 0.1);
+            border: 1px solid rgba(0, 255, 0, 0.3);
+            color: #51cf66;
+            padding: 12px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .success-state {
+            display: none;
+        }
+        .success-icon {
+            font-size: 48px;
+            color: #51cf66;
+            margin-bottom: 20px;
+        }
+        @media (max-width: 480px) {
+            .container {
+                padding: 30px 20px;
+                margin: 10px;
+            }
+            .title {
+                font-size: 20px;
+            }
+            .subtitle {
+                font-size: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🎬 Klicktape</div>
+        
+        <!-- Confirmation Form -->
+        <div id="confirmation-form">
+            <div class="title">Confirm Your Account</div>
+            <div class="subtitle">
+                Please enter your email and password to complete your account verification.
+            </div>
+            
+            <form id="confirmForm">
+                <div class="form-group">
+                    <label class="form-label" for="email">Email Address</label>
+                    <input 
+                        type="email" 
+                        id="email" 
+                        class="form-input" 
+                        placeholder="Enter your email address"
+                        required
+                        autocomplete="email"
+                    >
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label" for="password">Password</label>
+                    <input 
+                        type="password" 
+                        id="password" 
+                        class="form-input" 
+                        placeholder="Enter your password"
+                        required
+                        autocomplete="current-password"
+                    >
+                </div>
+                
+                <button type="submit" id="confirmBtn" class="confirm-button">
+                    Confirm Account
+                </button>
+            </form>
+            
+            <div id="message"></div>
+        </div>
+
+        <!-- Success State -->
+        <div id="success-state" class="success-state">
+            <div class="success-icon">✅</div>
+            <div class="title">Account Confirmed!</div>
+            <div class="subtitle">
+                Congratulations! Your account has been confirmed and is now active.
+                <br><br>
+                You will be automatically redirected to the Klicktape app in a few seconds.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Supabase configuration - Production
+        const SUPABASE_URL = 'https://wpxkjqfcoudcddluiiab.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweGtqcWZjb3VkY2RkbHVpaWFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMxNzYzMjAsImV4cCI6MjA2ODc1MjMyMH0.jHHkzKzg9oqysBOY7ohIa-6iveAOnF_FOvCsGV18MCU';
+
+        let verificationToken = null;
+        let isSubmitting = false;
+
+        function getUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            const hashParams = new URLSearchParams(window.location.hash.substring(1));
+            
+            const result = {};
+            for (const [key, value] of params) {
+                result[key] = decodeURIComponent(value);
+            }
+            for (const [key, value] of hashParams) {
+                result[key] = decodeURIComponent(value);
+            }
+            
+            console.log('🔍 Parsed URL parameters:', result);
+            return result;
+        }
+
+        function showError(message) {
+            const messageDiv = document.getElementById('message');
+            if (!messageDiv) {
+                console.error('Message element not found');
+                return;
+            }
+            // Create error div safely to prevent XSS
+            messageDiv.innerHTML = '<div class="error"></div>';
+            const errorDiv = messageDiv.querySelector('.error');
+            if (errorDiv) {
+                errorDiv.textContent = message; // Safe - prevents XSS by not executing HTML/JS
+            }
+        }
+
+        function showSuccess() {
+            document.getElementById('confirmation-form').style.display = 'none';
+            document.getElementById('success-state').style.display = 'block';
+        }
+
+        function redirectToApp() {
+            // Try different redirect methods for production
+            const appScheme = 'klicktape://';
+            const webUrl = 'https://klicktape-d087a.web.app';
+            const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.klicktape.app';
+            const appStoreUrl = 'https://apps.apple.com/app/klicktape/id123456789';
+            
+            // Detect platform and redirect accordingly
+            const userAgent = navigator.userAgent.toLowerCase();
+            const isAndroid = userAgent.includes('android');
+            const isIOS = userAgent.includes('iphone') || userAgent.includes('ipad');
+            
+            if (isAndroid) {
+                // Try app scheme first, then Play Store
+                window.location.href = appScheme;
+                setTimeout(() => {
+                    window.location.href = playStoreUrl;
+                }, 2000);
+            } else if (isIOS) {
+                // Try app scheme first, then App Store
+                window.location.href = appScheme;
+                setTimeout(() => {
+                    window.location.href = appStoreUrl;
+                }, 2000);
+            } else {
+                // Desktop - redirect to web version
+                window.location.href = webUrl;
+            }
+        }
+
+        async function confirmAccount(email, password) {
+            try {
+                // First, sign in the user with their credentials
+                const signInResponse = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': SUPABASE_ANON_KEY
+                    },
+                    body: JSON.stringify({
+                        email: email,
+                        password: password
+                    })
+                });
+
+                if (!signInResponse.ok) {
+                    const errorData = await signInResponse.json();
+                    throw new Error(errorData.error_description || 'Invalid email or password');
+                }
+
+                const signInData = await signInResponse.json();
+                
+                // Now verify the email using the verification token from URL
+                if (verificationToken) {
+                    const verifyResponse = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'apikey': SUPABASE_ANON_KEY,
+                            'Authorization': `Bearer ${signInData.access_token}`
+                        },
+                        body: JSON.stringify({
+                            type: 'signup',
+                            token: verificationToken
+                        })
+                    });
+
+                    if (!verifyResponse.ok) {
+                        const errorData = await verifyResponse.json();
+                        throw new Error(errorData.error_description || 'Email verification failed');
+                    }
+                }
+
+                return { success: true, user: signInData.user };
+            } catch (error) {
+                console.error('Account confirmation error:', error);
+                throw error;
+            }
+        }
+
+        async function completeReferralAfterVerification() {
+            try {
+                const pendingReferralCode = localStorage.getItem('pendingReferralCode');
+                if (pendingReferralCode) {
+                    console.log('🔗 Completing referral after email verification:', pendingReferralCode);
+                    
+                    const referralResponse = await fetch(`${SUPABASE_URL}/rest/v1/rpc/complete_referral`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'apikey': SUPABASE_ANON_KEY
+                        },
+                        body: JSON.stringify({
+                            referral_code: pendingReferralCode
+                        })
+                    });
+                    
+                    if (referralResponse.ok) {
+                        const referralData = await referralResponse.json();
+                        console.log('✅ Referral completed successfully:', referralData);
+                        localStorage.removeItem('pendingReferralCode');
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Error completing referral:', error);
+            }
+        }
+
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', function() {
+            const params = getUrlParams();
+            console.log('🔍 URL params:', params);
+
+            // Check for verification token in multiple possible parameter names
+            if (params.token) {
+                verificationToken = params.token;
+                console.log('✅ Found verification token in "token" parameter');
+            } else if (params.access_token) {
+                verificationToken = params.access_token;
+                console.log('✅ Found verification token in "access_token" parameter');
+            } else if (params.confirmation_token) {
+                verificationToken = params.confirmation_token;
+                console.log('✅ Found verification token in "confirmation_token" parameter');
+            }
+
+            // Log error but don't block manual verification
+            if (params.error) {
+                console.log('⚠️ Automatic verification failed:', params.error_description || params.error);
+                console.log('ℹ️ User can still verify manually by entering credentials');
+                
+                // Show a non-blocking warning instead of blocking error
+                const messageDiv = document.getElementById('message');
+                if (messageDiv) {
+                    messageDiv.innerHTML = '<div style="background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); color: #ffa500; padding: 12px; border-radius: 8px; margin: 20px 0; text-align: center;">Automatic verification failed. Please enter your credentials below to verify manually.</div>';
+                }
+            }
+
+            // If we have a verification token, log it for debugging
+            if (verificationToken) {
+                console.log('🎯 Using verification token:', verificationToken.substring(0, 10) + '...');
+            } else {
+                console.log('ℹ️ No verification token found in URL - user will need to enter credentials manually');
+            }
+
+            // Handle form submission
+            document.getElementById('confirmForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                if (isSubmitting) return;
+                isSubmitting = true;
+
+                const email = document.getElementById('email').value.trim();
+                const password = document.getElementById('password').value;
+                const confirmBtn = document.getElementById('confirmBtn');
+                const messageDiv = document.getElementById('message');
+
+                // Clear previous messages
+                messageDiv.innerHTML = '';
+
+                // Validate inputs
+                if (!email || !password) {
+                    showError('Please enter both email and password.');
+                    isSubmitting = false;
+                    return;
+                }
+
+                // Update button state
+                confirmBtn.disabled = true;
+                confirmBtn.innerHTML = '<div class="spinner"></div>Confirming Account...';
+
+                try {
+                    const result = await confirmAccount(email, password);
+                    
+                    if (result.success) {
+                        // Complete referral if applicable
+                        await completeReferralAfterVerification();
+                        
+                        // Show success and redirect
+                        showSuccess();
+                        setTimeout(() => {
+                            redirectToApp();
+                        }, 3000);
+                    }
+                } catch (error) {
+                    showError(error.message || 'Account confirmation failed. Please check your credentials and try again.');
+                } finally {
+                    confirmBtn.disabled = false;
+                    confirmBtn.innerHTML = 'Confirm Account';
+                    isSubmitting = false;
+                }
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Verification - KlickTape</title>
+    <meta name="description" content="Verify your KlickTape account email address">
+    <meta name="robots" content="noindex, nofollow">
+    
+    <!-- Preload critical resources -->
+    <link rel="preconnect" href="https://wpxkjqfcoudcddluiiab.supabase.co">
+    <link rel="preload" href="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" as="script">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="/favicon.png">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            margin: 0 auto 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: bold;
+            color: white;
+        }
+
+        .status {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+
+        .status.loading {
+            color: #667eea;
+        }
+
+        .status.success {
+            color: #10b981;
+        }
+
+        .status.error {
+            color: #ef4444;
+        }
+
+        .message {
+            font-size: 16px;
+            color: #6b7280;
+            margin-bottom: 30px;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            text-decoration: none;
+            display: inline-block;
+            margin: 10px;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .button:active {
+            transform: translateY(0);
+        }
+
+        .button.secondary {
+            background: #f3f4f6;
+            color: #374151;
+        }
+
+        .button.secondary:hover {
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .redirect-info {
+            background: #f0f9ff;
+            border: 1px solid #0ea5e9;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            font-size: 14px;
+            color: #0c4a6e;
+        }
+
+        .error-details {
+            background: #fef2f2;
+            border: 1px solid #fca5a5;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: left;
+            font-size: 14px;
+            color: #991b1b;
+            display: none;
+        }
+
+        .error-details pre {
+            background: #fee2e2;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                padding: 30px 20px;
+                margin: 10px;
+            }
+            
+            .logo {
+                width: 60px;
+                height: 60px;
+                font-size: 24px;
+            }
+            
+            .status {
+                font-size: 20px;
+            }
+        }
+
+        /* Success animation */
+        .checkmark {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            display: block;
+            stroke-width: 3;
+            stroke: #10b981;
+            stroke-miterlimit: 10;
+            margin: 20px auto;
+            box-shadow: inset 0px 0px 0px #10b981;
+            animation: fill .4s ease-in-out .4s forwards, scale .3s ease-in-out .9s both;
+        }
+
+        .checkmark__circle {
+            stroke-dasharray: 166;
+            stroke-dashoffset: 166;
+            stroke-width: 3;
+            stroke-miterlimit: 10;
+            stroke: #10b981;
+            fill: none;
+            animation: stroke 0.6s cubic-bezier(0.65, 0, 0.45, 1) forwards;
+        }
+
+        .checkmark__check {
+            transform-origin: 50% 50%;
+            stroke-dasharray: 48;
+            stroke-dashoffset: 48;
+            animation: stroke 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.8s forwards;
+        }
+
+        @keyframes stroke {
+            100% {
+                stroke-dashoffset: 0;
+            }
+        }
+
+        @keyframes scale {
+            0%, 100% {
+                transform: none;
+            }
+            50% {
+                transform: scale3d(1.1, 1.1, 1);
+            }
+        }
+
+        @keyframes fill {
+            100% {
+                box-shadow: inset 0px 0px 0px 30px #10b981;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">KT</div>
+        
+        <div id="status" class="status loading">Verifying your email...</div>
+        <div id="message" class="message">Please wait while we verify your email address.</div>
+        
+        <div id="spinner" class="spinner"></div>
+        
+        <div id="redirectInfo" class="redirect-info hidden">
+            <strong>🚀 Opening KlickTape App...</strong><br>
+            If the app doesn't open automatically, you can:
+            <br><br>
+            <button id="openAppBtn" class="button">Open KlickTape App</button>
+            <a href="https://klicktape.com" class="button secondary">Go to Website</a>
+        </div>
+        
+        <div id="errorDetails" class="error-details">
+            <strong>⚠️ Verification Failed</strong>
+            <div id="errorMessage"></div>
+        </div>
+    </div>
+
+    <!-- Supabase SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        // Configuration
+        const CONFIG = {
+            SUPABASE_URL: 'https://wpxkjqfcoudcddluiiab.supabase.co',
+            SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweGtqcWZjb3VkY2RkbHVpaWFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMxNzYzMjAsImV4cCI6MjA2ODc1MjMyMH0.jHHkzKzg9oqysBOY7ohIa-6iveAOnF_FOvCsGV18MCU',
+            DEEP_LINKS: [
+                'klicktape://auth/verified',
+                'exp://192.168.31.241:8081/--/auth/verified'
+            ],
+            FALLBACK_URL: 'https://klicktape.com',
+            RETRY_ATTEMPTS: 3,
+            RETRY_DELAY: 2000
+        };
+
+        // Initialize Supabase
+        const supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+
+        // DOM elements
+        const elements = {
+            status: document.getElementById('status'),
+            message: document.getElementById('message'),
+            redirectInfo: document.getElementById('redirectInfo'),
+            openAppBtn: document.getElementById('openAppBtn'),
+            errorDetails: document.getElementById('errorDetails'),
+            errorMessage: document.getElementById('errorMessage'),
+            spinner: document.getElementById('spinner')
+        };
+
+        // URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        const type = urlParams.get('type');
+        const accessToken = urlParams.get('access_token');
+        const refreshToken = urlParams.get('refresh_token');
+
+        // Utility functions
+        function updateStatus(className, content) {
+            elements.status.className = `status ${className}`;
+            elements.status.textContent = content;
+        }
+
+        function updateMessage(content) {
+            elements.message.textContent = content;
+        }
+
+        function showError(message, details = null) {
+            updateStatus('error', 'Verification Failed');
+            updateMessage(message);
+            elements.spinner.classList.add('hidden');
+            elements.errorDetails.style.display = 'block';
+            
+            if (details) {
+                // Safe JSON display - textContent prevents XSS
+                elements.errorMessage.textContent = JSON.stringify(details, null, 2);
+                elements.errorMessage.style.whiteSpace = 'pre-wrap'; // Preserve formatting
+            }
+        }
+
+        function showSuccess() {
+            updateStatus('success', 'Email Verified Successfully!');
+            updateMessage('Your email has been verified. You can now access all KlickTape features.');
+            elements.spinner.classList.add('hidden');
+            
+            // Add success checkmark
+            const checkmark = document.createElement('svg');
+            checkmark.className = 'checkmark';
+            checkmark.innerHTML = `
+                <circle class="checkmark__circle" fill="none" cx="40" cy="40" r="38"/>
+                <path class="checkmark__check" fill="none" d="m16,40 l12,12 24,-24"/>
+            `;
+            elements.spinner.parentNode.insertBefore(checkmark, elements.spinner);
+            
+            elements.redirectInfo.classList.remove('hidden');
+        }
+
+        function redirectToApp() {
+            let attempted = 0;
+            
+            function tryDeepLink() {
+                if (attempted >= CONFIG.DEEP_LINKS.length) {
+                    console.log('All deep links attempted, staying on page');
+                    return;
+                }
+                
+                const deepLink = CONFIG.DEEP_LINKS[attempted];
+                console.log(`Attempting deep link ${attempted + 1}: ${deepLink}`);
+                
+                // Create invisible iframe for deep link
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                iframe.src = deepLink;
+                document.body.appendChild(iframe);
+                
+                // Clean up iframe after attempt
+                setTimeout(() => {
+                    document.body.removeChild(iframe);
+                    attempted++;
+                    
+                    // Try next deep link after delay
+                    if (attempted < CONFIG.DEEP_LINKS.length) {
+                        setTimeout(tryDeepLink, 1000);
+                    }
+                }, 500);
+            }
+            
+            // Start deep link attempts
+            tryDeepLink();
+        }
+
+        // Complete referral after verification
+        async function completeReferralAfterVerification() {
+            const referralCode = localStorage.getItem('pendingReferralCode') || sessionStorage.getItem('pendingReferralCode');
+            
+            if (!referralCode) {
+                console.log('No pending referral to complete');
+                return;
+            }
+            
+            console.log('Completing referral for code:', referralCode);
+            
+            try {
+                let userId = null;
+                
+                // Try to get user ID from access token
+                if (accessToken) {
+                    try {
+                        const response = await fetch(`${CONFIG.SUPABASE_URL}/auth/v1/user`, {
+                            headers: {
+                                'Authorization': `Bearer ${accessToken}`,
+                                'apikey': CONFIG.SUPABASE_ANON_KEY
+                            }
+                        });
+                        
+                        if (response.ok) {
+                            const userData = await response.json();
+                            userId = userData.id;
+                        }
+                    } catch (error) {
+                        console.warn('Could not fetch user data for referral completion:', error);
+                    }
+                }
+                
+                if (userId) {
+                    // Call the referral completion API
+                    const referralResponse = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/referrals`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Authorization': `Bearer ${accessToken}`,
+                            'apikey': CONFIG.SUPABASE_ANON_KEY,
+                            'Content-Type': 'application/json',
+                            'Prefer': 'return=minimal'
+                        },
+                        body: JSON.stringify({
+                            status: 'completed',
+                            completed_at: new Date().toISOString()
+                        })
+                    });
+
+                    if (referralResponse.ok) {
+                        console.log('✅ Referral completed successfully');
+                        // Clear the pending referral
+                        localStorage.removeItem('pendingReferralCode');
+                        sessionStorage.removeItem('pendingReferralCode');
+                    } else {
+                        console.warn('Failed to complete referral:', await referralResponse.text());
+                    }
+                }
+            } catch (error) {
+                console.error('Error completing referral:', error);
+            }
+        }
+
+        // Main verification function
+        async function verifyEmail() {
+            console.log('Starting email verification process');
+            console.log('URL params:', { token, type, accessToken: !!accessToken, refreshToken: !!refreshToken });
+
+            // Check if we have the required parameters
+            if (!token && !accessToken) {
+                showError('Invalid verification link. Missing verification token.');
+                return;
+            }
+
+            try {
+                let result;
+                
+                if (accessToken && refreshToken) {
+                    // Handle direct token verification (new Supabase flow)
+                    console.log('Using access token verification');
+                    
+                    result = await supabase.auth.setSession({
+                        access_token: accessToken,
+                        refresh_token: refreshToken
+                    });
+                    
+                    if (result.error) {
+                        throw result.error;
+                    }
+                    
+                    console.log('✅ Session set successfully');
+                } else if (token) {
+                    // Handle traditional token verification
+                    console.log('Using token verification');
+                    
+                    result = await supabase.auth.verifyOtp({
+                        token_hash: token,
+                        type: type || 'signup'
+                    });
+                    
+                    if (result.error) {
+                        throw result.error;
+                    }
+                    
+                    console.log('✅ Token verified successfully');
+                }
+
+                // Complete referral if applicable
+                await completeReferralAfterVerification();
+                
+                showSuccess();
+                
+                // Try to redirect to app after showing success message
+                setTimeout(() => {
+                    redirectToApp();
+                }, 2000);
+                
+            } catch (error) {
+                console.error('Verification error:', error);
+                
+                let errorMessage = 'An unexpected error occurred during verification.';
+                
+                if (error.message) {
+                    if (error.message.includes('expired')) {
+                        errorMessage = 'This verification link has expired. Please request a new one.';
+                    } else if (error.message.includes('invalid')) {
+                        errorMessage = 'This verification link is invalid. Please check your email for the correct link.';
+                    } else if (error.message.includes('already')) {
+                        errorMessage = 'This email has already been verified. You can now sign in to your account.';
+                    } else {
+                        errorMessage = error.message;
+                    }
+                }
+                
+                showError(errorMessage, error);
+            }
+        }
+
+        // Event listeners
+        elements.openAppBtn.addEventListener('click', () => {
+            redirectToApp();
+        });
+
+        // Handle page visibility change (detect if user returned from app)
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                console.log('Page became visible - user may have returned from app');
+            }
+        });
+
+        // Start verification when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('Page loaded, starting verification...');
+            verifyEmail();
+        });
+
+        // Handle errors
+        window.addEventListener('error', (event) => {
+            console.error('Global error:', event.error);
+            showError('A technical error occurred. Please try again later.', event.error);
+        });
+
+        // Handle unhandled promise rejections
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('Unhandled promise rejection:', event.reason);
+            showError('A technical error occurred. Please try again later.', event.reason);
+        });
+    </script>
+</body>
+</html>

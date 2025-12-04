@@ -1,0 +1,344 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verifying Your Account - Klicktape</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #000000, #1a1a1a, #2a2a2a);
+            color: white;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            text-align: center;
+            max-width: 450px;
+            width: 100%;
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        .logo {
+            font-size: 32px;
+            font-weight: bold;
+            color: #FFD700;
+            margin-bottom: 20px;
+        }
+        .title {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #ffffff;
+        }
+        .subtitle {
+            font-size: 16px;
+            margin-bottom: 30px;
+            line-height: 1.5;
+            color: #cccccc;
+        }
+        .loading-state {
+            display: block;
+        }
+        .error-state {
+            display: none;
+        }
+        .success-state {
+            display: none;
+        }
+        .spinner-large {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid #FFD700;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .retry-button {
+            width: 100%;
+            padding: 14px;
+            background: #FFD700;
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-top: 20px;
+        }
+        .retry-button:hover {
+            background: #e6c200;
+        }
+        .retry-button:disabled {
+            background: rgba(255, 215, 0, 0.5);
+            cursor: not-allowed;
+        }
+        .error-message {
+            background: rgba(255, 0, 0, 0.1);
+            border: 1px solid rgba(255, 0, 0, 0.3);
+            color: #ff6b6b;
+            padding: 16px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: left;
+            line-height: 1.6;
+        }
+        .success-icon {
+            font-size: 64px;
+            color: #51cf66;
+            margin-bottom: 20px;
+            animation: scaleIn 0.5s ease-out;
+        }
+        @keyframes scaleIn {
+            0% { transform: scale(0); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        .countdown {
+            font-size: 14px;
+            color: #FFD700;
+            margin-top: 10px;
+        }
+        @media (max-width: 480px) {
+            .container {
+                padding: 30px 20px;
+                margin: 10px;
+            }
+            .title {
+                font-size: 20px;
+            }
+            .subtitle {
+                font-size: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🎬 Klicktape</div>
+        
+        <!-- Loading State -->
+        <div id="loading-state" class="loading-state">
+            <div class="spinner-large"></div>
+            <div class="title">Verifying Your Email</div>
+            <div class="subtitle">
+                Please wait while we confirm your account...
+            </div>
+        </div>
+
+        <!-- Error State -->
+        <div id="error-state" class="error-state">
+            <div class="title">Verification Failed</div>
+            <div class="error-message" id="error-message">
+                <!-- Error details will be inserted here -->
+            </div>
+            <button id="retry-btn" class="retry-button" onclick="retryVerification()">
+                Try Again
+            </button>
+            <div class="subtitle" style="margin-top: 20px;">
+                Need help? <a href="mailto:support@klicktape.com" style="color: #FFD700;">Contact Support</a>
+            </div>
+        </div>
+
+        <!-- Success State -->
+        <div id="success-state" class="success-state">
+            <div class="success-icon">✅</div>
+            <div class="title">Email Verified!</div>
+            <div class="subtitle">
+                Congratulations! Your email has been successfully verified.
+                <br><br>
+                <span class="countdown" id="countdown">Redirecting to Klicktape in 3 seconds...</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SUPABASE_URL = 'https://wpxkjqfcoudcddluiiab.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweGtqcWZjb3VkY2RkbHVpaWFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMxNzYzMjAsImV4cCI6MjA2ODc1MjMyMH0.jHHkzKzg9oqysBOY7ohIa-6iveAOnF_FOvCsGV18MCU';
+
+        function getUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            const hashParams = new URLSearchParams(window.location.hash.substring(1));
+            const result = {};
+            for (const [key, value] of params) result[key] = decodeURIComponent(value);
+            for (const [key, value] of hashParams) result[key] = decodeURIComponent(value);
+            console.log('🔍 Parsed URL parameters:', result);
+            return result;
+        }
+
+        function showState(state) {
+            document.getElementById('loading-state').style.display = state === 'loading' ? 'block' : 'none';
+            document.getElementById('error-state').style.display = state === 'error' ? 'block' : 'none';
+            document.getElementById('success-state').style.display = state === 'success' ? 'block' : 'none';
+        }
+
+        function showError(message, details = '') {
+            const errorMessageDiv = document.getElementById('error-message');
+            if (errorMessageDiv) {
+                let errorHtml = `<strong>Error:</strong> ${message}`;
+                if (details) errorHtml += `<br><br><small>${details}</small>`;
+                errorMessageDiv.innerHTML = errorHtml;
+            }
+            showState('error');
+        }
+
+        function showSuccess() {
+            showState('success');
+            startCountdown();
+        }
+
+        function startCountdown() {
+            let seconds = 3;
+            const countdownEl = document.getElementById('countdown');
+            const interval = setInterval(() => {
+                seconds--;
+                if (seconds > 0) {
+                    countdownEl.textContent = `Redirecting to Klicktape in ${seconds} second${seconds !== 1 ? 's' : ''}...`;
+                } else {
+                    countdownEl.textContent = 'Redirecting now...';
+                    clearInterval(interval);
+                    redirectToApp();
+                }
+            }, 1000);
+        }
+
+        function redirectToApp() {
+            const appScheme = 'klicktape://';
+            const webUrl = 'https://klicktape-d087a.web.app';
+            const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.klicktape.app';
+            const appStoreUrl = 'https://apps.apple.com/app/klicktape/id123456789';
+            const userAgent = navigator.userAgent.toLowerCase();
+            const isAndroid = userAgent.includes('android');
+            const isIOS = userAgent.includes('iphone') || userAgent.includes('ipad');
+            if (isAndroid) {
+                window.location.href = appScheme;
+                setTimeout(() => window.location.href = playStoreUrl, 2000);
+            } else if (isIOS) {
+                window.location.href = appScheme;
+                setTimeout(() => window.location.href = appStoreUrl, 2000);
+            } else {
+                window.location.href = webUrl;
+            }
+        }
+
+        function retryVerification() {
+            window.location.reload();
+        }
+
+        async function verifyEmail(tokenHash, type) {
+            try {
+                console.log('🔐 Starting automatic email verification...');
+                console.log('📝 Token hash:', tokenHash ? tokenHash.substring(0, 20) + '...' : 'none');
+                console.log('📝 Type:', type);
+                const verifyResponse = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+                    body: JSON.stringify({ type: type || 'signup', token_hash: tokenHash })
+                });
+                const responseData = await verifyResponse.json();
+                console.log('📬 Verification response:', responseData);
+                if (!verifyResponse.ok) throw new Error(responseData.error_description || responseData.msg || 'Email verification failed');
+                if (responseData.error) throw new Error(responseData.error_description || responseData.error.message || 'Email verification failed');
+                console.log('✅ Email verification successful!');
+                return { success: true, data: responseData };
+            } catch (error) {
+                console.error('❌ Email verification error:', error);
+                throw error;
+            }
+        }
+
+        async function completeReferralAfterVerification() {
+            try {
+                const pendingReferralCode = localStorage.getItem('pendingReferralCode');
+                if (pendingReferralCode) {
+                    console.log('🔗 Completing referral after email verification:', pendingReferralCode);
+                    const referralResponse = await fetch(`${SUPABASE_URL}/rest/v1/rpc/complete_referral`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+                        body: JSON.stringify({ referral_code: pendingReferralCode })
+                    });
+                    if (referralResponse.ok) {
+                        const referralData = await referralResponse.json();
+                        console.log('✅ Referral completed successfully:', referralData);
+                        localStorage.removeItem('pendingReferralCode');
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Error completing referral:', error);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', async function() {
+            console.log('🚀 Email verification page loaded (PRODUCTION)');
+            const params = getUrlParams();
+            console.log('📋 URL parameters:', params);
+
+            // Check for errors first
+            if (params.error) {
+                console.error('❌ Error in URL:', params.error, params.error_description);
+                showError(params.error_description || params.error || 'Verification link is invalid or expired', 'Please request a new verification email or contact support if the problem persists.');
+                return;
+            }
+
+            // Check if already verified (access_token present means Supabase already verified)
+            if (params.access_token) {
+                console.log('✅ Email already verified by Supabase! Access token present.');
+                console.log('🎉 Verification successful - redirecting to app...');
+                await completeReferralAfterVerification();
+                showSuccess();
+                return;
+            }
+
+            // Otherwise, look for token_hash to verify
+            const tokenHash = params.token_hash || params.token || params.confirmation_token;
+            const type = params.type || 'signup';
+
+            if (!tokenHash) {
+                console.error('❌ No verification token found in URL');
+                showError('Invalid verification link', 'The verification link is missing required parameters. Please use the link from your email or request a new verification email.');
+                return;
+            }
+
+            console.log('🔑 Found token hash:', tokenHash.substring(0, 20) + '...');
+            console.log('📝 Verification type:', type);
+            try {
+                showState('loading');
+                const result = await verifyEmail(tokenHash, type);
+                if (result.success) {
+                    console.log('✅ Email verified successfully!');
+                    await completeReferralAfterVerification();
+                    showSuccess();
+                }
+            } catch (error) {
+                console.error('❌ Verification failed:', error);
+                let errorMessage = 'Email verification failed';
+                let errorDetails = '';
+                if (error.message.includes('expired')) {
+                    errorMessage = 'Verification link has expired';
+                    errorDetails = 'Please request a new verification email from the app.';
+                } else if (error.message.includes('invalid')) {
+                    errorMessage = 'Invalid verification link';
+                    errorDetails = 'This link may have already been used or is no longer valid.';
+                } else {
+                    errorMessage = error.message || 'Email verification failed';
+                    errorDetails = 'Please try again or contact support if the problem persists.';
+                }
+                showError(errorMessage, errorDetails);
+            }
+        });
+    </script>
+</body>
+</html>

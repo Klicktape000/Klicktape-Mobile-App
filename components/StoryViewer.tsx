@@ -1,0 +1,534 @@
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import {
+  View,
+  Image,
+  StyleSheet,
+  Dimensions,
+  TouchableOpacity,
+  Animated,
+  Text,
+} from "react-native";
+import { AntDesign, Feather } from "@expo/vector-icons";
+import { VideoView, useVideoPlayer } from "expo-video";
+import { Link } from "expo-router";
+import { useDispatch } from 'react-redux';
+import { removeStory } from '@/src/store/slices/storiesSlice';
+import { supabase } from '../lib/supabase';
+import { storiesAPI } from '@/lib/storiesApi';
+
+const { width, height } = Dimensions.get("window");
+
+interface Story {
+  id: string;
+  user_id: string;
+  image_url: string;
+  video_url?: string;
+  thumbnail_url?: string;
+  story_type?: 'image' | 'video';
+  caption?: string;
+  created_at: string;
+  expires_at: string;
+  viewed_by: string[];
+  user: {
+    username: string;
+    avatar: string;
+  };
+}
+
+interface StoryViewerProps {
+  stories: Story[];
+  onClose: () => void;
+  currentIndex: number;
+}
+
+const StoryViewer = ({ stories, onClose, currentIndex }: StoryViewerProps) => {
+  const [progress] = useState(new Animated.Value(0));
+  const [currentStoryIndex, setCurrentStoryIndex] = useState(currentIndex);
+  const [paused, setPaused] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [hideInterface, setHideInterface] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const dispatch = useDispatch();
+
+  // Add this line to get the current story
+  const currentStory = stories[currentStoryIndex];
+
+  // Load current user to determine ownership
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) setCurrentUserId(user.id);
+      } catch {
+        // console.error('Failed to load current user');
+      }
+    };
+    loadUser();
+  }, []);
+
+  const handleDeleteCurrentStory = async () => {
+    if (!currentStory) return;
+    try {
+      await storiesAPI.deleteStory(currentStory.id);
+      // Optimistically update UI
+      dispatch(removeStory(currentStory.id));
+      setShowOptions(false);
+      onClose();
+    } catch {
+      // console.error('Error deleting story');
+    }
+  };
+
+  // Video component using expo-video
+  const VideoViewComponent = ({ videoUri, paused, onVideoEnd }: { videoUri: string; paused: boolean; onVideoEnd: () => void }) => {
+    const player = useVideoPlayer(videoUri, (player) => {
+      player.loop = true;
+      player.muted = false;
+      if (!paused) {
+        player.play();
+      }
+    });
+
+    React.useEffect(() => {
+      if (paused) {
+        player.pause();
+      } else {
+        player.play();
+      }
+    }, [paused, player]);
+
+    return (
+      <VideoView
+        style={styles.image}
+        player={player}
+        contentFit="contain"
+        allowsFullscreen={false}
+        allowsPictureInPicture={false}
+      />
+    );
+  };
+
+  const nextStory = useCallback(() => {
+    if (currentStoryIndex < stories.length - 1) {
+      // Fade out current story
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => {
+        setCurrentStoryIndex(currentStoryIndex + 1);
+        // Fade in next story
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }).start();
+      });
+    } else {
+      onClose();
+    }
+  }, [currentStoryIndex, stories.length, fadeAnim, onClose]);
+
+  const previousStory = useCallback(() => {
+    if (currentStoryIndex > 0) {
+      // Fade out current story
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => {
+        setCurrentStoryIndex(currentStoryIndex - 1);
+        // Fade in previous story
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }).start();
+      });
+    }
+  }, [currentStoryIndex, fadeAnim]);
+
+  const startProgress = useCallback(() => {
+    progress.setValue(0);
+    Animated.timing(progress, {
+      toValue: 1,
+      duration: 5000,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        nextStory();
+      }
+    });
+  }, [nextStory, progress]);
+
+  useEffect(() => {
+    // Fade in animation when component mounts
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+
+    if (!paused) {
+      startProgress();
+    }
+    return () => {
+      progress.stopAnimation();
+      fadeAnim.stopAnimation();
+    };
+  }, [currentStoryIndex, paused, fadeAnim, startProgress, progress]);
+
+  const handlePressIn = () => {
+    setPaused(true);
+    progress.stopAnimation();
+    setHideInterface(true);
+  };
+
+  const handlePressOut = () => {
+    setPaused(false);
+    setHideInterface(false);
+  };
+
+  const handleTap = useCallback((direction: 'next' | 'previous') => {
+    // Prevent closing on tap
+    if (direction === 'next') {
+      nextStory();
+    } else {
+      previousStory();
+    }
+  }, [nextStory, previousStory]);
+
+  // Component for clickable username that handles async user lookup
+  const ClickableUsername = ({ username }: { username: string }) => {
+    const [userId, setUserId] = useState<string | null>(null);
+
+    useEffect(() => {
+      const lookupUser = async () => {
+        try {
+          const { supabase } = await import('../lib/supabase');
+          const { data: user, error } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('username', username as any)
+            .single();
+
+          if (!error && user && typeof user === 'object' && 'id' in user) {
+            setUserId((user as any).id);
+          }
+        } catch (__error) {
+          console.error('Error looking up user:', __error);
+        }
+      };
+
+      lookupUser();
+    }, [username]);
+
+    if (userId) {
+      return (
+        <Link href={`/userProfile/${userId}`} asChild>
+          <Text style={styles.usernameText}>
+            @{username}
+          </Text>
+        </Link>
+      );
+    }
+
+    // Fallback if user ID not found yet or lookup failed
+    return (
+      <Text style={styles.usernameText}>
+        @{username}
+      </Text>
+    );
+  };
+
+  const renderCaptionWithClickableUsernames = (caption: string) => {
+    // Split caption by @ mentions
+    const parts = caption.split(/(@\w+)/g);
+
+    return (
+      <View>
+        <Text style={styles.captionText}>
+          {parts.map((part, index) => {
+            if (part.startsWith('@')) {
+              const username = part.substring(1); // Remove @ symbol
+              return (
+                <ClickableUsername key={index} username={username} />
+              );
+            }
+            return (
+              <Text key={index} style={styles.captionText}>
+                {part}
+              </Text>
+            );
+          })}
+        </Text>
+      </View>
+    );
+  };
+
+  return (
+    <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+      <Animated.View
+        style={[
+          styles.progressContainer,
+          { opacity: hideInterface ? 0 : 1 }
+        ]}
+      >
+        {stories.map((_, index) => (
+          <View key={index} style={styles.progressBarBackground}>
+            <Animated.View
+              style={[
+                styles.progressBar,
+                {
+                  width:
+                    index === currentStoryIndex
+                      ? progress.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: ["0%", "100%"],
+                        })
+                      : index < currentStoryIndex
+                      ? "100%"
+                      : "0%",
+                },
+              ]}
+            />
+          </View>
+        ))}
+      </Animated.View>
+
+      {/* User Info Header */}
+      <Animated.View
+        style={[
+          styles.userInfoContainer,
+          { opacity: hideInterface ? 0 : 1 }
+        ]}
+      >
+        <Image
+          source={{ uri: currentStory?.user.avatar || "https://via.placeholder.com/32" }}
+          style={styles.avatar}
+          onError={(e) => {/* Avatar load error */}}
+        />
+        {currentStory?.user?.username && (
+          <Text style={styles.username}>
+            {currentStory.user.username}
+          </Text>
+        )}
+        {/* Story count indicator */}
+        {stories.length > 1 && (
+          <Text style={styles.storyCount}>
+            {currentStoryIndex + 1}/{stories.length}
+          </Text>
+        )}
+        <View style={{ flex: 1 }} />
+        {/* Three dots menu for owner's story */}
+        {currentUserId === currentStory?.user_id && (
+          <TouchableOpacity style={styles.closeButton} onPress={() => setShowOptions(v => !v)}>
+            <Feather name="more-vertical" size={24} color="white" />
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+          <AntDesign name="close" size={24} color="white" />
+        </TouchableOpacity>
+
+        {/* Options Dropdown */}
+        {showOptions && currentUserId === currentStory?.user_id && (
+          <View style={styles.optionsMenu}>
+            <TouchableOpacity onPress={handleDeleteCurrentStory}>
+              <Text style={styles.optionsMenuItemText}>Delete Story</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </Animated.View>
+
+      <View style={styles.imageContainer}>
+        {currentStory?.story_type === 'video' && currentStory?.video_url ? (
+          <VideoViewComponent
+            videoUri={currentStory.video_url}
+            paused={paused}
+            onVideoEnd={nextStory}
+          />
+        ) : (
+          <Image
+            source={{
+              uri: currentStory?.story_type === 'video'
+                ? (currentStory?.thumbnail_url || currentStory?.image_url)
+                : (currentStory?.image_url || "https://via.placeholder.com/300")
+            }}
+            style={styles.image}
+            onError={(e) => {/* Image load error */}}
+          />
+        )}
+      </View>
+
+      {/* Caption Display - Footer Area (Always Visible) */}
+      {currentStory?.caption && (
+        <View style={styles.captionFooter}>
+          {renderCaptionWithClickableUsernames(currentStory.caption)}
+        </View>
+      )}
+
+      <View style={styles.touchableContainer}>
+        <TouchableOpacity
+          style={styles.previousTouch}
+          onPress={() => handleTap('previous')}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          activeOpacity={1}
+        />
+        <TouchableOpacity
+          style={styles.centerTouch}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          activeOpacity={1}
+        />
+        <TouchableOpacity
+          style={styles.nextTouch}
+          onPress={() => handleTap('next')}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          activeOpacity={1}
+        />
+      </View>
+    </Animated.View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "black",
+    width: width,
+    height: height,
+  },
+  progressContainer: {
+    flexDirection: "row",
+    position: "absolute",
+    top: 60,
+    zIndex: 1,
+    width: "100%",
+    paddingHorizontal: 10,
+  },
+  progressBarBackground: {
+    flex: 1,
+    height: 2,
+    backgroundColor: "rgba(255,255,255,0.3)",
+    marginHorizontal: 2,
+    borderRadius: 1,
+    overflow: "hidden",
+  },
+  progressBar: {
+    height: "100%",
+    backgroundColor: "white",
+    borderRadius: 1,
+  },
+  imageContainer: {
+    width: width,
+    height: height,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: "black",
+    overflow: 'hidden',
+  },
+  image: {
+    width: width,
+    height: height,
+    resizeMode: "contain", // Show full image without cropping
+    backgroundColor: "black",
+  },
+  userInfoContainer: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    right: 10,
+    zIndex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+  },
+  avatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: "white",
+  },
+  username: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+  storyCount: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "500",
+    marginLeft: 8,
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  closeButton: {
+    padding: 8,
+  },
+  optionsMenu: {
+    position: 'absolute',
+    top: 42,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    zIndex: 2,
+  },
+  optionsMenuItemText: {
+    color: 'white',
+    fontSize: 14,
+  },
+  touchableContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 100, // Leave space for caption footer
+    flexDirection: "row",
+  },
+  previousTouch: {
+    flex: 1,
+  },
+  centerTouch: {
+    flex: 3,
+  },
+  nextTouch: {
+    flex: 2,
+  },
+  captionFooter: {
+    position: 'absolute',
+    bottom: 40,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    zIndex: 10, // Ensure it's above touch areas
+  },
+  captionText: {
+    color: 'white',
+    fontSize: 16,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  usernameText: {
+    color: '#FFD700', // Golden color for usernames
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+  },
+});
+
+export default StoryViewer;

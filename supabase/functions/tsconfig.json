@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": false,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "noResolve": false,
+    "allowArbitraryExtensions": true,
+    "types": ["./deno.d.ts"],
+    "typeRoots": ["./"]
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.js",
+    "./deno.d.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

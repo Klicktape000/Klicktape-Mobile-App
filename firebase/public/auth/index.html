@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Klicktape - Auth Redirect</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #000000, #1a1a1a, #2a2a2a);
+            color: white;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            text-align: center;
+            max-width: 400px;
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            backdrop-filter: blur(10px);
+        }
+        .logo {
+            font-size: 32px;
+            font-weight: bold;
+            color: #FFD700;
+            margin-bottom: 20px;
+        }
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid #FFD700;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">Klicktape</div>
+        <div>Processing authentication...</div>
+        <div class="spinner"></div>
+    </div>
+
+    <script>
+        // Handle Supabase auth redirects
+        function redirectToCorrectPage() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const hashParams = new URLSearchParams(window.location.hash.substring(1));
+            
+            // Get parameters from both query string and hash
+            const token = urlParams.get('token') || hashParams.get('token');
+            const type = urlParams.get('type') || hashParams.get('type');
+            const accessToken = urlParams.get('access_token') || hashParams.get('access_token');
+            const error = urlParams.get('error') || hashParams.get('error');
+            
+            console.log('🔐 Auth redirect handler:', { token, type, accessToken, error });
+            
+            // Handle recovery/password reset
+            if ((token && type === 'recovery') || (accessToken && type === 'recovery')) {
+                console.log('➡️ Redirecting to password reset page');
+                window.location.href = `/forgot-password.html${window.location.search}${window.location.hash}`;
+                return;
+            }
+            
+            // Handle email verification
+            if ((token && type === 'signup') || type === 'email') {
+                console.log('➡️ Redirecting to email verification page');
+                window.location.href = `/verify-email.html${window.location.search}${window.location.hash}`;
+                return;
+            }
+            
+            // Handle errors
+            if (error) {
+                console.error('❌ Auth error:', error);
+                window.location.href = `/forgot-password.html${window.location.search}${window.location.hash}`;
+                return;
+            }
+            
+            // Default: show error message
+            console.log('⚠️ No auth parameters found');
+            document.querySelector('.container').innerHTML = `
+                <div class="logo">Klicktape</div>
+                <div style="color: #ff6b6b; margin-top: 20px;">
+                    Invalid authentication link. Please request a new one.
+                </div>
+            `;
+        }
+        
+        // Run redirect on page load
+        redirectToCorrectPage();
+    </script>
+</body>
+</html>
