@@ -17,7 +17,7 @@ import { useEnhancedRefresh } from "@/hooks/useEnhancedRefresh";
 import { useRealtimePosts } from "@/hooks/useRealtimePosts";
 import { usersApi } from "@/lib/usersApi";
 import PostCard from "./PostCard";
-import Stories from "./Stories";
+import StoriesFixed from "./StoriesFixed";
 import EnhancedRefreshIndicator from "./EnhancedRefreshIndicator";
 import FeedSkeleton from "./skeletons/FeedSkeleton";
 import { Post } from "@/src/types/post";
@@ -98,17 +98,9 @@ const Posts = () => {
   const [followedUsers, setFollowedUsers] = useState<Set<string>>(new Set());
   const [followStatusLoaded, setFollowStatusLoaded] = useState(false);
 
-  // Initialize Instagram-style optimizer
-  useEffect(() => {
-    if (user?.id && queryClient) {
-      const optimizer = getOptimizer(queryClient, user.id);
-      
-      // Initialize optimizer on mount
-      setTimeout(() => {
-        optimizer.initialize();
-      }, 0);
-    }
-  }, [user?.id, queryClient]);
+  // OPTIMIZED: Removed Instagram optimizer initialization
+  // It was adding unnecessary overhead with setTimeout on mount
+  // The optimizer will initialize lazily when needed
 
   //// console.log('📊 Posts: Smart feed state -', {
 // //   postsCount: posts?.length || 0,
@@ -121,57 +113,63 @@ const Posts = () => {
 // //   followStatusLoaded
 // // });
 
-  // Load initial follow status for all users in the feed
+  // OPTIMIZED: Lazy load follow status - don't block feed rendering
+  // Follow buttons will show after posts are visible
   useEffect(() => {
     const loadInitialFollowStatus = async () => {
       if (!user?.id || !posts || posts.length === 0 || followStatusLoaded) return;
 
-      try {
-        // Get unique user IDs from posts (excluding current user)
-        const userIds = [...new Set(posts
-          .map(post => post.user_id)
-          .filter(userId => userId !== user.id)
-        )];
+      // Delay follow status check to not block initial render
+      setTimeout(async () => {
+        try {
+          // Get unique user IDs from posts (excluding current user)
+          const userIds = Array.from(new Set(posts
+            .map(post => post.user_id)
+            .filter(userId => userId !== user.id)
+          ));
 
-        if (userIds.length === 0) {
+          if (userIds.length === 0) {
+            setFollowStatusLoaded(true);
+            return;
+          }
+
+          //// console.log('🔍 Loading follow status for users:', userIds);
+
+          // OPTIMIZED: Batch check follow status in chunks of 5 to reduce parallel queries
+          const chunkSize = 5;
+          const initialFollowedUsers = new Set<string>();
+          
+          for (let i = 0; i < userIds.length; i += chunkSize) {
+            const chunk = userIds.slice(i, i + chunkSize);
+            const followStatusPromises = chunk.map(async (userId) => {
+              try {
+                const isFollowing = await usersApi.checkFollowing(userId, user.id);
+                return { userId, isFollowing };
+              } catch (__error) {
+                return { userId, isFollowing: false };
+              }
+            });
+
+            const followResults = await Promise.all(followStatusPromises);
+            followResults.forEach(({ userId, isFollowing }) => {
+              if (isFollowing) {
+                initialFollowedUsers.add(userId);
+              }
+            });
+          }
+
+          //// console.log('✅ Initial follow status loaded:', {
+  // //   totalUsers: userIds.length,
+  // //   followedUsers: Array.from(initialFollowedUsers)
+  // // });
+
+          setFollowedUsers(initialFollowedUsers);
           setFollowStatusLoaded(true);
-          return;
+        } catch (__error) {
+          // console.error('❌ Error loading initial follow status:', error);
+          setFollowStatusLoaded(true); // Set to true to prevent infinite retries
         }
-
-        //// console.log('🔍 Loading follow status for users:', userIds);
-
-        // Check follow status for each user
-        const followStatusPromises = userIds.map(async (userId) => {
-          try {
-            const isFollowing = await usersApi.checkFollowing(userId, user.id);
-            return { userId, isFollowing };
-          } catch (__error) {
-            // console.error(`Error checking follow status for user ${userId}:`, error);
-            return { userId, isFollowing: false };
-          }
-        });
-
-        const followResults = await Promise.all(followStatusPromises);
-        
-        // Update followedUsers set with initial data
-        const initialFollowedUsers = new Set<string>();
-        followResults.forEach(({ userId, isFollowing }) => {
-          if (isFollowing) {
-            initialFollowedUsers.add(userId);
-          }
-        });
-
-        //// console.log('✅ Initial follow status loaded:', {
-// //   totalUsers: userIds.length,
-// //   followedUsers: Array.from(initialFollowedUsers)
-// // });
-
-        setFollowedUsers(initialFollowedUsers);
-        setFollowStatusLoaded(true);
-      } catch (__error) {
-        // console.error('❌ Error loading initial follow status:', error);
-        setFollowStatusLoaded(true); // Set to true to prevent infinite retries
-      }
+      }, 1000); // Delay 1 second to let feed render first
     };
 
     loadInitialFollowStatus();
@@ -345,7 +343,7 @@ const Posts = () => {
   if (loading && (!posts || posts.length === 0)) {
     return (
       <View style={{ backgroundColor: colors.background, flex: 1 }}>
-        <Stories />
+        <StoriesFixed />
         <FeedSkeleton numPosts={3} />
       </View>
     );
@@ -365,7 +363,7 @@ const Posts = () => {
               {...enhancedRefresh.refreshControlProps}
             />
           }
-          ListHeaderComponent={<Stories />}
+          ListHeaderComponent={<StoriesFixed />}
           contentContainerStyle={{ flexGrow: 1 }}
         />
       </View>
@@ -390,7 +388,7 @@ const Posts = () => {
         viewabilityConfig={viewabilityConfig}
         onEndReached={handleEndReached}
         onEndReachedThreshold={0.25}
-        ListHeaderComponent={<Stories />}
+        ListHeaderComponent={<StoriesFixed />}
         ListFooterComponent={
           loading && posts.length > 0 ? (
             <View style={styles.footerLoader}>

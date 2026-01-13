@@ -75,7 +75,7 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ onClose }) => {
   }, [currentUserId, queryClient]);
 
   // INSTAGRAM-STYLE: Ultra-aggressive cache for instant loading
-  const { data: leaderboardData, isLoading: leaderboardLoading, refetch: refetchLeaderboard, isFetched: leaderboardFetched } = useQuery({
+  const { data: leaderboardData, isLoading: leaderboardLoading, refetch: refetchLeaderboard, isFetched: leaderboardFetched } = useQuery<LeaderboardEntry[]>({
     queryKey: ['leaderboard', 'current'],
     queryFn: async () => {
       await leaderboardAPI.ensureCurrentPeriod();
@@ -86,13 +86,9 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ onClose }) => {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    onSuccess: async (data) => {
-      // Write-through snapshot for instant load on next app start
-      await FallbackCache.set<LeaderboardEntry[]>('leaderboard:current', data || [], 600);
-    },
   });
 
-  const { data: userStats, isLoading: statsLoading, refetch: refetchStats, isFetched: statsFetched } = useQuery({
+  const { data: userStats, isLoading: statsLoading, refetch: refetchStats, isFetched: statsFetched } = useQuery<UserLeaderboardStats>({
     queryKey: ['leaderboard', 'stats', currentUserId],
     queryFn: () => leaderboardAPI.getUserStats(),
     staleTime: Infinity,
@@ -100,15 +96,9 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ onClose }) => {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    onSuccess: async (data) => {
-      const uid = currentUserId || (JSON.parse((await AsyncStorage.getItem('user')) || '{}')?.id || '');
-      if (uid) {
-        await FallbackCache.set<UserLeaderboardStats>(`leaderboard:stats:${uid}`, data as UserLeaderboardStats, 600);
-      }
-    },
   });
 
-  const { data: userRewardsData, isLoading: rewardsLoading, refetch: refetchRewards, isFetched: rewardsFetched } = useQuery({
+  const { data: userRewardsData, isLoading: rewardsLoading, refetch: refetchRewards, isFetched: rewardsFetched } = useQuery<UserReward[]>({
     queryKey: ['leaderboard', 'rewards', currentUserId],
     queryFn: async () => {
       const rewards = await leaderboardAPI.getUserRewards(currentUserId || undefined);
@@ -122,16 +112,29 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ onClose }) => {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    onSuccess: async (data) => {
-      const uid = currentUserId || (JSON.parse((await AsyncStorage.getItem('user')) || '{}')?.id || '');
-      if (uid) {
-        await FallbackCache.set<UserReward[]>(`leaderboard:rewards:${uid}`, data || [], 600);
-      }
-    },
   });
 
   const leaderboard = leaderboardData || [];
   const userRewards = userRewardsData || [];
+
+  // Save data to cache when it changes (replaces deprecated onSuccess)
+  useEffect(() => {
+    if (leaderboardData) {
+      FallbackCache.set<LeaderboardEntry[]>('leaderboard:current', leaderboardData, 600);
+    }
+  }, [leaderboardData]);
+
+  useEffect(() => {
+    if (userStats && currentUserId) {
+      FallbackCache.set<UserLeaderboardStats>(`leaderboard:stats:${currentUserId}`, userStats, 600);
+    }
+  }, [userStats, currentUserId]);
+
+  useEffect(() => {
+    if (userRewardsData && currentUserId) {
+      FallbackCache.set<UserReward[]>(`leaderboard:rewards:${currentUserId}`, userRewardsData, 600);
+    }
+  }, [userRewardsData, currentUserId]);
 
   // Show skeleton ONLY when loading with no cached data at all
   const shouldShowSkeleton = (leaderboardLoading && !leaderboardFetched && !leaderboardData);

@@ -88,12 +88,13 @@ export interface ProfileBookmark {
 
 /**
  * Fetch complete profile data - ULTRA OPTIMIZED with minimal queries
+ * INSTANT RENDER: Returns basic profile data immediately, counts load in background
  */
 const fetchCompleteProfileData = async (
   profileUserId: string,
   currentUserId?: string
 ): Promise<ProfileData> => {
-  // OPTIMIZED: Only 3 parallel queries instead of 8+
+  // OPTIMIZED: Only 3 parallel queries for INSTANT initial render
   const [profileResult, followCheck, rankResult] = await Promise.all([
     // 1. Get profile data
     supabase
@@ -125,24 +126,15 @@ const fetchCompleteProfileData = async (
     throw profileResult.error;
   }
 
-  // Get counts AFTER profile loads (non-blocking for UI)
-  // These will be fetched in background after initial render
-  const countsPromise = Promise.all([
-    supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', profileUserId),
-    supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', profileUserId),
-    supabase.from('posts').select('*', { count: 'exact', head: true }).eq('user_id', profileUserId),
-    supabase.from('reels').select('*', { count: 'exact', head: true }).eq('user_id', profileUserId),
-    supabase.from('bookmarks').select('*', { count: 'exact', head: true }).eq('user_id', profileUserId),
-  ]);
-
-  // Return basic profile data immediately
-  const basicProfile = {
+  // OPTIMIZED: Return basic profile data IMMEDIATELY for instant render
+  // Counts will be fetched separately in background (non-blocking)
+  return {
     profile: profileResult.data as any,
-    followers_count: 0, // Will update
-    following_count: 0, // Will update
-    posts_count: 0, // Will update
-    reels_count: 0, // Will update
-    bookmarks_count: 0, // Will update
+    followers_count: 0, // Will be loaded by separate hook
+    following_count: 0, // Will be loaded by separate hook
+    posts_count: 0, // Will be loaded by separate hook
+    reels_count: 0, // Will be loaded by separate hook
+    bookmarks_count: 0, // Will be loaded by separate hook
     is_following: !!followCheck.data,
     rank_data: {
       rank_position: (rankResult.data as any)?.rank_position || null,
@@ -151,18 +143,6 @@ const fetchCompleteProfileData = async (
       points_to_next_rank: 0,
       is_in_top_50: ((rankResult.data as any)?.rank_position || 999) <= 50,
     },
-  };
-
-  // Get counts in background
-  const [followersCount, followingCount, postsCount, reelsCount, bookmarksCount] = await countsPromise;
-
-  return {
-    ...basicProfile,
-    followers_count: followersCount.count || 0,
-    following_count: followingCount.count || 0,
-    posts_count: postsCount.count || 0,
-    reels_count: reelsCount.count || 0,
-    bookmarks_count: bookmarksCount.count || 0,
   };
 };
 
@@ -317,7 +297,7 @@ export const useCompleteProfileData = (
   return useQuery({
     queryKey: ['profile', 'complete', profileUserId],
     queryFn: () => fetchCompleteProfileData(profileUserId, currentUserId),
-    enabled: options?.enabled !== false && !!profileUserId,
+    enabled: options?.enabled !== false && !!profileUserId && profileUserId.length > 0, // CRITICAL: Validate profileUserId
     staleTime: options?.staleTime || 1000 * 60 * 5, // 5 minutes
     gcTime: options?.cacheTime || 1000 * 60 * 10, // 10 minutes (renamed from cacheTime)
     networkMode: 'offlineFirst', // Cache first for instant display
@@ -345,7 +325,7 @@ export const useProfilePosts = (
   return useQuery({
     queryKey: ['profile', 'posts', userId, limit, offset],
     queryFn: () => fetchProfilePosts(userId, limit, offset),
-    enabled: options?.enabled !== false && !!userId,
+    enabled: options?.enabled !== false && !!userId && userId.length > 0, // CRITICAL: Validate userId
     staleTime: options?.staleTime || 1000 * 60 * 2, // 2 minutes
     gcTime: options?.cacheTime || 1000 * 60 * 5, // 5 minutes
     networkMode: 'offlineFirst', // Cache first
@@ -389,7 +369,7 @@ export const useProfileReels = (
   return useQuery({
     queryKey: ['profile', 'reels', userId, limit, offset],
     queryFn: () => fetchProfileReels(userId, limit, offset),
-    enabled: options?.enabled !== false && !!userId,
+    enabled: options?.enabled !== false && !!userId && userId.length > 0, // CRITICAL: Validate userId
     staleTime: options?.staleTime || 1000 * 60 * 2, // 2 minutes
     gcTime: options?.cacheTime || 1000 * 60 * 5, // 5 minutes
     networkMode: 'offlineFirst', // Cache first
@@ -433,7 +413,7 @@ export const useProfileBookmarks = (
   return useQuery({
     queryKey: ['profile', 'bookmarks', userId, limit, offset],
     queryFn: () => fetchProfileBookmarks(userId, limit, offset),
-    enabled: options?.enabled !== false && !!userId,
+    enabled: options?.enabled !== false && !!userId && userId.length > 0, // CRITICAL: Validate userId
     staleTime: options?.staleTime || 1000 * 60 * 2, // 2 minutes
     gcTime: options?.cacheTime || 1000 * 60 * 5, // 5 minutes
   });

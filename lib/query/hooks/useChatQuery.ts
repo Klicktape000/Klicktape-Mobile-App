@@ -48,10 +48,54 @@ const chatQueryFunctions = {
 
   /**
    * Get conversations list
+   * OPTIMIZED: Uses database function to fetch only latest message per conversation
+   * Much faster than fetching ALL messages
    */
   getConversations: async (currentUserId: string): Promise<Conversation[]> => {
     try {
-      // Get all messages where user is sender or receiver
+      // OPTIMIZED: Use RPC function to get only latest message per conversation
+      // This is MUCH faster than fetching all messages
+      const { data, error } = await (supabase.rpc as any)('get_user_conversations', {
+        user_id_param: currentUserId
+      });
+
+      if (error) {
+        console.error('Error fetching conversations with RPC:', error);
+        // Fallback to old method if RPC fails
+        return await chatQueryFunctions.getConversationsFallback(currentUserId);
+      }
+
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      // Transform RPC result to match expected format
+      const conversations = data.map((conv: any) => ({
+        userId: conv.other_user_id,
+        username: conv.username || 'User',
+        avatar: conv.avatar_url || "https://via.placeholder.com/50",
+        lastMessage: messagesAPI.getMessagePreview(conv.last_message_content, conv.last_message_type),
+        timestamp: conv.last_message_time,
+        isRead: conv.is_read,
+      }));
+
+      return conversations.sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+    } catch (__error) {
+      console.error('Error loading conversations:', __error);
+      // Fallback to old method
+      return await chatQueryFunctions.getConversationsFallback(currentUserId);
+    }
+  },
+
+  /**
+   * Fallback method if RPC function doesn't exist
+   * Fetches all messages (slower but works)
+   */
+  getConversationsFallback: async (currentUserId: string): Promise<Conversation[]> => {
+    try {
+      // LIMIT to last 100 messages to reduce load
       const { data: messages, error } = await supabase
         .from("messages")
         .select(`
@@ -64,7 +108,8 @@ const chatQueryFunctions = {
           message_type
         `)
         .or(`sender_id.eq.${currentUserId},receiver_id.eq.${currentUserId}`)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .limit(100); // CRITICAL: Limit to last 100 messages only
 
       if (error) throw error;
 
@@ -106,7 +151,6 @@ const chatQueryFunctions = {
         const userDoc = profileMap.get(otherId);
 
         if (!userDoc) {
-// console.warn(`User not found for conversation: ${otherId}`);
           return null;
         }
 
@@ -124,7 +168,6 @@ const chatQueryFunctions = {
         (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
       );
     } catch (__error) {
-       // Error loading conversations
        throw __error;
      }
   },

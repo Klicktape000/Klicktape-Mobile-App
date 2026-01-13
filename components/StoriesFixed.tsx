@@ -496,18 +496,18 @@ const styles = StyleSheet.create({
     marginRight: 16,
   },
   storyImageContainer: {
-    width: 110, // Increased from 90
-    height: 110, // Increased from 90
-    borderRadius: 16, // Increased border radius
+    width: 110,
+    height: 110,
+    borderRadius: 55, // Make it perfectly round (half of width/height)
     borderWidth: 2,
     justifyContent: "center",
     alignItems: "center",
-    padding: 3, // Increased padding
+    padding: 3,
   },
   storyImage: {
     width: "100%",
     height: "100%",
-    borderRadius: 13, // Adjusted for new container size
+    borderRadius: 52, // Make inner image round (half of container - padding)
   },
   addStoryIcon: {
     position: 'absolute',
@@ -532,7 +532,7 @@ const styles = StyleSheet.create({
     height: "100%",
     justifyContent: "center",
     alignItems: "center",
-    borderRadius: 13,
+    borderRadius: 52, // Make it round to match story images
   },
   modal: {
     margin: 0,

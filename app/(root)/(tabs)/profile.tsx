@@ -65,38 +65,38 @@ const Profile = () => {
     cacheTime: 24 * 60 * 60 * 1000, // 24 hours cache
   });
 
-  // INSTAGRAM-STYLE: Posts load instantly from cache - PREFETCH immediately
+  // OPTIMIZED: Only load posts for posts tab initially
   const {
     data: posts = [],
     isLoading: isPostsLoading,
     refetch: refetchPosts,
     isFetched: isPostsFetched
   } = useProfilePosts(userId || '', 12, 0, {
-    enabled: !!userId, // ALWAYS enabled - prefetch immediately
+    enabled: !!userId && activeTab === 'posts', // ONLY load when posts tab is active
     staleTime: Infinity, // Never stale - instant from cache
     cacheTime: 24 * 60 * 60 * 1000, // 24 hours
   });
 
-  // INSTAGRAM-STYLE: Reels load instantly from cache - PREFETCH immediately
+  // OPTIMIZED: Only load reels when reels tab is active
   const {
     data: reels = [],
     isLoading: isReelsLoading,
     refetch: refetchReels,
     isFetched: isReelsFetched
   } = useProfileReels(userId || '', 12, 0, {
-    enabled: !!userId, // ALWAYS enabled - prefetch immediately
+    enabled: !!userId && activeTab === 'reels', // ONLY load when reels tab is active
     staleTime: Infinity, // Never stale
     cacheTime: 24 * 60 * 60 * 1000, // 24 hours
   });
 
-  // INSTAGRAM-STYLE: Bookmarks load instantly from cache - PREFETCH immediately
+  // OPTIMIZED: Only load bookmarks when saved tab is active
   const {
     data: bookmarks = [],
     isLoading: isBookmarksLoading,
     refetch: refetchBookmarks,
     isFetched: isBookmarksFetched
   } = useProfileBookmarks(userId || '', 12, 0, {
-    enabled: !!userId, // ALWAYS enabled - prefetch immediately for instant display
+    enabled: !!userId && activeTab === 'saved', // CRITICAL: Only when userId exists AND saved tab is active
     staleTime: Infinity, // Never stale
     cacheTime: 24 * 60 * 60 * 1000, // 24 hours
   });
@@ -459,26 +459,35 @@ const Profile = () => {
     getUserData();
   }, []);
 
+  // OPTIMIZED: Lazy load snapshots - don't block initial render
   useEffect(() => {
+    if (!userId) return;
+    
+    // Fire and forget - load in background
     const hydrateSnapshots = async () => {
-      if (!userId) return;
-      const profileSnap = await FallbackCache.get<any>(`profile:complete:${userId}`);
-      if (profileSnap) {
-        queryClient.setQueryData(['profile', 'complete', userId], profileSnap);
-      }
-      const postsSnap = await FallbackCache.get<any[]>(`profile:posts:${userId}:12:0`);
-      if (postsSnap) {
-        queryClient.setQueryData(['profile', 'posts', userId, 12, 0], postsSnap);
-      }
-      const reelsSnap = await FallbackCache.get<any[]>(`profile:reels:${userId}:12:0`);
-      if (reelsSnap) {
-        queryClient.setQueryData(['profile', 'reels', userId, 12, 0], reelsSnap);
-      }
-      const bookmarksSnap = await FallbackCache.get<any[]>(`profile:bookmarks:${userId}:12:0`);
-      if (bookmarksSnap) {
-        queryClient.setQueryData(['profile', 'bookmarks', userId, 12, 0], bookmarksSnap);
+      try {
+        const profileSnap = await FallbackCache.get<any>(`profile:complete:${userId}`);
+        if (profileSnap) {
+          queryClient.setQueryData(['profile', 'complete', userId], profileSnap);
+        }
+        const postsSnap = await FallbackCache.get<any[]>(`profile:posts:${userId}:12:0`);
+        if (postsSnap) {
+          queryClient.setQueryData(['profile', 'posts', userId, 12, 0], postsSnap);
+        }
+        const reelsSnap = await FallbackCache.get<any[]>(`profile:reels:${userId}:12:0`);
+        if (reelsSnap) {
+          queryClient.setQueryData(['profile', 'reels', userId, 12, 0], reelsSnap);
+        }
+        const bookmarksSnap = await FallbackCache.get<any[]>(`profile:bookmarks:${userId}:12:0`);
+        if (bookmarksSnap) {
+          queryClient.setQueryData(['profile', 'bookmarks', userId, 12, 0], bookmarksSnap);
+        }
+      } catch (error) {
+        // Silent fail - queries will load from network
       }
     };
+    
+    // Don't await - let it run in background
     hydrateSnapshots();
   }, [userId, queryClient]);
 
@@ -500,34 +509,8 @@ const Profile = () => {
     persistSnapshots();
   }, [userId, profileData, posts, reels, bookmarks]);
 
-  // Prefetch data for other tabs when profile loads
-  useEffect(() => {
-    if (!userId || !profileData) return;
-
-    // Only prefetch after initial profile data loads successfully
-    // Prefetch tabs with a longer delay to not block initial render
-    const prefetchData = async () => {
-      // Only prefetch the most likely next tab (posts)
-      if (activeTab !== 'posts') {
-        queryClient.prefetchQuery({
-          queryKey: ['profile', 'posts', userId, 20, 0],
-          queryFn: async () => {
-            const { data } = await supabase.rpc('get_profile_posts' as any, {
-              p_user_id: userId,
-              p_limit: 20,
-              p_offset: 0,
-            } as any);
-            return data;
-          },
-          staleTime: 2 * 60 * 1000,
-        });
-      }
-    };
-
-    // Prefetch after a longer delay to prioritize initial render
-    const timeoutId = setTimeout(prefetchData, 1500); // Increased from 500ms
-    return () => clearTimeout(timeoutId);
-  }, [userId, profileData, activeTab, queryClient]);
+  // OPTIMIZED: Removed aggressive prefetching - causes slowdown on profile load
+  // Tabs will load on-demand when user switches to them
 
   useEffect(() => {
     return () => {

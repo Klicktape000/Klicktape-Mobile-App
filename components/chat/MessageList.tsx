@@ -336,19 +336,27 @@ const MessageList: React.FC<MessageListProps> = memo(({
           }
         }}
         ListHeaderComponent={renderFooter}
-        removeClippedSubviews={true} // Enable for better performance
-        maxToRenderPerBatch={10} // Optimized for smooth scrolling
-        windowSize={10} // Balanced for performance and memory
-        initialNumToRender={15} // Show enough messages initially
-        updateCellsBatchingPeriod={50} // Smooth updates
-        maintainVisibleContentPosition={{
-          minIndexForVisible: 0, // Keep first visible item in place
+        // Instagram-style FlatList optimizations for 60 FPS scrolling
+        removeClippedSubviews={true}
+        maxToRenderPerBatch={5} // Reduced from 10 for smoother scrolling
+        windowSize={7} // Reduced from 10 for better memory management
+        initialNumToRender={15}
+        updateCellsBatchingPeriod={50}
+        // Estimated item layout for better scrolling performance
+        getItemLayout={(data, index) => {
+          const ESTIMATED_MESSAGE_HEIGHT = 80;
+          return {
+            length: ESTIMATED_MESSAGE_HEIGHT,
+            offset: ESTIMATED_MESSAGE_HEIGHT * index,
+            index,
+          };
         }}
-        // Instagram-like optimizations
+        maintainVisibleContentPosition={{
+          minIndexForVisible: 0,
+        }}
+        // Instagram-like keyboard and interaction optimizations
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
-        // Performance optimizations for infinite scroll
-        getItemLayout={undefined} // Let FlatList calculate dynamically
         legacyImplementation={false}
         refreshControl={refreshControl}
       />
