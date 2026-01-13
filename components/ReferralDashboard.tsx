@@ -44,7 +44,7 @@ const ReferralDashboard: React.FC<ReferralDashboardProps> = ({ userId }) => {
   }, [userId, queryClient]);
 
   // ULTRA-OPTIMIZED: Use TanStack Query with snapshot write-through
-  const { data: dashboard, isLoading: dashboardLoading, refetch: refetchDashboard, isFetched: dashboardFetched } = useQuery({
+  const { data: dashboard, isLoading: dashboardLoading, refetch: refetchDashboard, isFetched: dashboardFetched } = useQuery<ReferralDashboardType | null>({
     queryKey: ['referral', 'dashboard', userId],
     queryFn: () => referralAPI.getReferralDashboard(userId),
     enabled: !!userId,
@@ -54,14 +54,9 @@ const ReferralDashboard: React.FC<ReferralDashboardProps> = ({ userId }) => {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     networkMode: 'offlineFirst',
-    onSuccess: async (data) => {
-      if (data) {
-        await FallbackCache.set<ReferralDashboardType>(`referral:dashboard:${userId}`, data, 1800);
-      }
-    }
   });
 
-  const { data: referralLink, isLoading: linkLoading, refetch: refetchLink, isFetched: linkFetched } = useQuery({
+  const { data: referralLink, isLoading: linkLoading, refetch: refetchLink, isFetched: linkFetched } = useQuery<string | null>({
     queryKey: ['referral', 'link', userId],
     queryFn: () => referralAPI.generateReferralLink(userId),
     enabled: !!userId,
@@ -71,14 +66,24 @@ const ReferralDashboard: React.FC<ReferralDashboardProps> = ({ userId }) => {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     networkMode: 'offlineFirst',
-    onSuccess: async (data) => {
-      await FallbackCache.set<string | null>(`referral:link:${userId}`, data ?? null, 3600);
-    }
   });
 
   // Show skeleton IMMEDIATELY when loading with no cached data
   const shouldShowSkeleton = (dashboardLoading && !dashboardFetched && !dashboard) || 
                              (linkLoading && !linkFetched && !referralLink);
+
+  // Save data to cache when it changes (replaces deprecated onSuccess)
+  useEffect(() => {
+    if (dashboard && userId) {
+      FallbackCache.set<ReferralDashboardType>(`referral:dashboard:${userId}`, dashboard, 1800);
+    }
+  }, [dashboard, userId]);
+
+  useEffect(() => {
+    if (typeof referralLink !== 'undefined' && userId) {
+      FallbackCache.set<string | null>(`referral:link:${userId}`, referralLink ?? null, 3600);
+    }
+  }, [referralLink, userId]);
 
   const refreshDashboard = async () => {
     await Promise.all([refetchDashboard(), refetchLink()]);

@@ -70,24 +70,37 @@ export const useSocketChat = ({
   const isApiAvailable = true; // API is always available for messaging
   const effectiveConnectionStatus = isExpoGo ? isApiAvailable : isConnected;
 
-  // Polling fallback for Expo Go
+  // Polling fallback for Expo Go - ONLY when Supabase Realtime is not available
+  // OPTIMIZED: Disabled by default to avoid redundant queries
   useEffect(() => {
+    // DISABLED: Polling should only be used if Supabase Realtime fails
+    // Since Supabase Realtime is working, we don't need polling
+    // This eliminates the 3-second query spam
+    
+    // Uncomment below ONLY if you need polling as absolute fallback:
+    /*
     if (isExpoGo && enablePolling && onPollMessages) {
       if (isExpoGo && pollingInterval > 0) {
-        //// console.log('📱 Starting polling fallback for Expo Go (interval:', pollingInterval, 'ms)');
-        pollingIntervalRef.current = setInterval(() => {
-          //// console.log('🔄 Polling for new messages...');
-          onPollMessages?.();
+        //// console.log('📱 Starting polling fallback for Expo Go (interval:', pollingInterval, 'ms)');\n        pollingIntervalRef.current = setInterval(() => {
+          //// console.log('🔄 Polling for new messages...');\n          onPollMessages?.();
         }, pollingInterval);
       }
     } else {
       // Stop polling
       if (pollingIntervalRef.current) {
-        //// console.log('📱 Stopping polling fallback');
-        clearInterval(pollingIntervalRef.current);
+        //// console.log('📱 Stopping polling fallback');\n        clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
     }
+    */
+    
+    // Cleanup function
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
   }, [isExpoGo, enablePolling, pollingInterval, onPollMessages]);
 
   // Join chat room when component mounts and socket connects

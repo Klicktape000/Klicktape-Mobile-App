@@ -94,51 +94,53 @@ function ChatListContent() {
     getCurrentUser();
   }, [getCurrentUser]);
 
-  // INSTAGRAM OPTIMIZATION: Aggressively prefetch ALL conversation messages
-  // This makes opening any chat instant
+  // OPTIMIZED: Only prefetch the most recent conversation (if any) to reduce load
+  // Individual chats will load instantly from their navigation prefetch
   useEffect(() => {
     if (!currentUserId || conversations.length === 0) return;
 
-    const prefetchAllConversations = async () => {
-      // Prefetch ALL conversations for instant chat opening
-      for (const conv of conversations) {
-        const cacheKey = queryKeys.messages.messages(conv.userId);
-        
-        // Check if already cached
-        const cachedData = queryClient.getQueryData(cacheKey);
-        if (cachedData) continue; // Skip if already cached
+    // Only prefetch the FIRST (most recent) conversation for instant open
+    const prefetchMostRecent = async () => {
+      const mostRecentConv = conversations[0];
+      if (!mostRecentConv) return;
 
-        // Prefetch messages in background (parallel for speed)
-        queryClient.prefetchInfiniteQuery({
-          queryKey: cacheKey,
-          queryFn: async () => {
-            const { data, error } = await (supabase.rpc as any)('get_conversation_messages_optimized', {
-              p_user_id: currentUserId,
-              p_recipient_id: conv.userId,
-              p_limit: 50, // Fetch more messages upfront
-              p_offset: 0
-            });
+      const cacheKey = queryKeys.messages.messages(mostRecentConv.userId);
+      
+      // Check if already cached
+      const cachedData = queryClient.getQueryData(cacheKey);
+      if (cachedData) return; // Skip if already cached
 
-            if (error) throw error;
+      // Prefetch only the most recent conversation
+      queryClient.prefetchInfiniteQuery({
+        queryKey: cacheKey,
+        queryFn: async () => {
+          const { data, error } = await (supabase.rpc as any)('get_conversation_messages_optimized', {
+            p_user_id: currentUserId,
+            p_recipient_id: mostRecentConv.userId,
+            p_limit: 50,
+            p_offset: 0
+          });
 
-            const result = data as any;
-            return {
-              messages: result?.messages || [],
-              nextCursor: result?.hasMore ? 1 : undefined,
-              hasMore: result?.hasMore || false,
-              pageParam: 0,
-            };
-          },
-          initialPageParam: 0,
-          staleTime: Infinity,
-        }).catch(() => {
-          // Silent fail for prefetch
-        });
-      }
+          if (error) throw error;
+
+          const result = data as any;
+          return {
+            messages: result?.messages || [],
+            nextCursor: result?.hasMore ? 1 : undefined,
+            hasMore: result?.hasMore || false,
+            pageParam: 0,
+          };
+        },
+        initialPageParam: 0,
+        staleTime: Infinity,
+      }).catch(() => {
+        // Silent fail for prefetch
+      });
     };
 
-    // Start prefetching immediately (no delay)
-    prefetchAllConversations();
+    // Delay prefetch slightly to not block initial render
+    const timer = setTimeout(prefetchMostRecent, 500);
+    return () => clearTimeout(timer);
   }, [conversations, currentUserId, queryClient]);
 
   // Handle refresh for chat list - silent background refresh

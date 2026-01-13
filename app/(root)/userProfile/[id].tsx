@@ -94,47 +94,55 @@ const UserProfile = () => {
     cacheTime: 24 * 60 * 60 * 1000, // 24 hours
   });
 
-  // MAXIMUM SPEED: Posts load instantly
+  // OPTIMIZED: Only load posts when posts tab is active
   const {
     data: userPosts = [],
     isLoading: isPostsLoading,
     refetch: refetchPosts
   } = useProfilePosts(id, 12, 0, {
-    enabled: !!id,
+    enabled: !!id && activeTab === 'posts', // ONLY load when posts tab active
     staleTime: Infinity,
     cacheTime: 24 * 60 * 60 * 1000,
   });
 
-  // MAXIMUM SPEED: Reels load instantly
+  // OPTIMIZED: Only load reels when reels tab is active
   const {
     data: userReels = [],
     isLoading: isReelsLoading,
     refetch: refetchReels
   } = useProfileReels(id, 12, 0, {
-    enabled: !!id,
+    enabled: !!id && activeTab === 'reels', // ONLY load when reels tab active
     staleTime: Infinity,
     cacheTime: 24 * 60 * 60 * 1000,
   });
 
-  // Hydrate from AsyncStorage snapshots for instant first render
+  // OPTIMIZED: Lazy load snapshots - don't block initial render
   useEffect(() => {
+    if (!id) return;
+    
+    // Fire and forget - load in background
     const hydrateSnapshots = async () => {
-      if (!id) return;
-      const profileSnap = await FallbackCache.get<any>(`profile:complete:${id}`);
-      if (profileSnap) {
-        queryClient.setQueryData(['profile', 'complete', id], profileSnap);
-      }
-      const postsSnap = await FallbackCache.get<any[]>(`profile:posts:${id}:12:0`);
-      if (postsSnap) {
-        queryClient.setQueryData(['profile', 'posts', id, 12, 0], postsSnap);
-      }
-      const reelsSnap = await FallbackCache.get<any[]>(`profile:reels:${id}:12:0`);
-      if (reelsSnap) {
-        queryClient.setQueryData(['profile', 'reels', id, 12, 0], reelsSnap);
+      try {
+        const profileSnap = await FallbackCache.get<any>(`profile:complete:${id}`);
+        if (profileSnap) {
+          queryClient.setQueryData(['profile', 'complete', id], profileSnap);
+        }
+        const postsSnap = await FallbackCache.get<any[]>(`profile:posts:${id}:12:0`);
+        if (postsSnap) {
+          queryClient.setQueryData(['profile', 'posts', id, 12, 0], postsSnap);
+        }
+        const reelsSnap = await FallbackCache.get<any[]>(`profile:reels:${id}:12:0`);
+        if (reelsSnap) {
+          queryClient.setQueryData(['profile', 'reels', id, 12, 0], reelsSnap);
+        }
+      } catch (error) {
+        // Silent fail - queries will load from network
       }
     };
+    
+    // Don't await - let it run in background
     hydrateSnapshots();
-  }, [id, currentUserId, queryClient]);
+  }, [id, queryClient]);
 
   // Persist snapshots when fresh data arrives
   useEffect(() => {
@@ -152,13 +160,13 @@ const UserProfile = () => {
     persistSnapshots();
   }, [id, profileData, userPosts, userReels]);
 
-  // Use optimized bookmarks hook (only for own profile)
+  // OPTIMIZED: Only load bookmarks when saved tab is active AND viewing own profile
   const {
     data: userBookmarks = [],
     isLoading: isBookmarksLoading,
     refetch: refetchBookmarks
   } = useProfileBookmarks(id, 12, 0, {
-    enabled: !!id && id === currentUserId, // Load bookmarks for own profile regardless of active tab
+    enabled: !!id && id === currentUserId && activeTab === 'saved', // ONLY when viewing saved tab on own profile
   });
 
   // Debug: Log bookmarks data
@@ -275,27 +283,7 @@ const UserProfile = () => {
   }, []);
 
   useEffect(() => {
-    // Data is now loaded automatically by TanStack Query hooks
-    // Just track the profile view
-    const loadInitialData = async () => {
-      if (__DEV__) {
-// console.log('Profile view tracking check:', { currentUserId, profileId: id });
-      }
-
-      // Enhanced debug logging to check userProfile data
-      if (profileData) {
-// console.log('=== TIER DEBUG START ===');
-// console.log('DEBUG: Full profile object:', JSON.stringify(profileData.profile, null, 2));
-// console.log('DEBUG: current_tier value:', profileData.profile?.current_tier);
-// console.log('DEBUG: current_tier type:', typeof profileData.profile?.current_tier);
-// console.log('DEBUG: current_tier truthy check:', !!profileData.profile?.current_tier);
-// console.log('DEBUG: getTierName result:', getTierName(profileData.profile?.current_tier));
-// console.log('DEBUG: Current user ID:', currentUserId);
-// console.log('DEBUG: Profile ID:', id);
-// console.log('=== TIER DEBUG END ===');
-      }
-    };
-
+    // OPTIMIZED: Track profile view in background - don't block render
     const trackView = async () => {
       // Track profile view after a delay to ensure user data is loaded
       if (currentUserId && id && currentUserId !== id) {
@@ -312,21 +300,12 @@ const UserProfile = () => {
             console.error('Failed to track profile view:', __error);
           }
         }
-      } else {
-        if (__DEV__) {
-// console.log('Skipping profile view tracking:', {
-// currentUserId,
-// profileId: id,
-// reason: !currentUserId ? 'No current user' : !id ? 'No profile ID' : 'Self view'
-// });
-        }
       }
     };
 
     if (currentUserId !== null && id) {
-      loadInitialData();
-      // Track view after a delay to ensure everything is loaded
-      setTimeout(trackView, 500);
+      // OPTIMIZED: Fire and forget - don't block render
+      setTimeout(trackView, 1000); // Increased delay to not interfere with initial render
     }
   }, [id, currentUserId]);
 

@@ -72,6 +72,7 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
   // Refs for performance optimization
   const reactionTimeouts = useRef<Record<string, number>>({});
   const debounceTimeout = useRef<number | null>(null);
+  const lastMessageTimeRef = useRef<string>(new Date(0).toISOString()); // Track last message time for polling
 
   // Redux selectors
   const optimisticReactions = useSelector((state: RootState) => state.chatUI.optimisticReactions);
@@ -116,8 +117,11 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
       new Date((a as any).created_at).getTime() - new Date((b as any).created_at).getTime()
     );
 
-    // Total messages loaded across pages
-    // Sample message IDs for debugging
+    // Update lastMessageTimeRef with the most recent message timestamp (Instagram-style: O(1) tracking)
+    if (sortedMessages.length > 0) {
+      const latestMessage = sortedMessages[sortedMessages.length - 1];
+      lastMessageTimeRef.current = latestMessage.created_at;
+    }
 
     return sortedMessages;
   }, [messagesData]);
@@ -195,7 +199,8 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
     }
   }, [messageIds, userId]);
 
-  // OPTIMIZED: Lazy load reactions after messages are displayed (improves initial load speed)
+  // OPTIMIZED: Lazy load reactions - only fetch when actually needed
+  // Don't fetch on mount to improve initial load speed
   const messageIdsString = useMemo(() => messageIds.join(','), [messageIds]);
 
   useEffect(() => {
@@ -203,10 +208,12 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
       return;
     }
 
-    // Fetch reactions silently in background
+    // OPTIMIZED: Increased delay to reduce API calls during initial render
+    // Reactions are visual enhancements, not critical for chat functionality
+    // Fetch them after the chat is fully loaded and stable
     debounceTimeout.current = setTimeout(() => {
       fetchReactions();
-    }, 300); // Reduced delay for faster display
+    }, 2000); // Increased from 300ms to 2000ms (2 seconds) for lazy loading
 
     return () => {
       if (debounceTimeout.current) {
@@ -228,20 +235,8 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
     // Smart polling callback for Expo Go fallback - updates cache directly without refresh
     onPollMessages: useCallback(async () => {
       try {
-        // Get the latest message timestamp from current cache
-        const currentData = queryClient.getQueryData(queryKeys.messages.messages(recipientId)) as any;
-        let lastMessageTime = new Date(0).toISOString(); // Default to epoch
-        
-        if (currentData?.pages?.length > 0) {
-          const allMessages = currentData.pages.flatMap((page: any) => page.messages);
-          if (allMessages.length > 0) {
-            // Get the most recent message timestamp
-            const sortedMessages = allMessages.sort((a: any, b: any) => 
-              new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-            );
-            lastMessageTime = sortedMessages[0].created_at;
-          }
-        }
+        // Instagram-style: Use tracked ref instead of sorting entire history (O(1) vs O(n log n))
+        const lastMessageTime = lastMessageTimeRef.current;
 
         // Fetch only new messages since last timestamp
         const newMessages = await messagesAPI.getMessagesSince(userId, recipientId, lastMessageTime);
@@ -497,11 +492,36 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
     },
   });
 
-  // Supabase real-time subscriptions for new messages, message status updates and reactions
+  // OPTIMIZED Supabase real-time subscriptions with debouncing and batching
   useEffect(() => {
     if (!userId || !recipientId) return;
 
     // Setting up Supabase real-time subscriptions for chat
+
+    // OPTIMIZED: Use a single channel with multiple event listeners
+    // Batch updates to reduce re-renders
+    let updateBatch: Array<() => void> = [];
+    let batchTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const processBatch = () => {
+      if (updateBatch.length === 0) return;
+      
+      // Execute all batched updates
+      updateBatch.forEach(update => update());
+      updateBatch = [];
+      batchTimeout = null;
+    };
+
+    const scheduleBatchUpdate = (updateFn: () => void) => {
+      updateBatch.push(updateFn);
+      
+      if (batchTimeout) {
+        clearTimeout(batchTimeout);
+      }
+      
+      // Process batch after 50ms of no new updates
+      batchTimeout = setTimeout(processBatch, 50);
+    };
 
     // Create a single channel for all real-time events to reduce overhead
     const chatChannel = supabase
@@ -522,29 +542,31 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
         (payload) => {
           // New message received via real-time
 
-          // Optimized cache update - batch operations
-          queryClient.setQueryData(
-            queryKeys.messages.messages(recipientId),
-            (oldData: any) => {
-              if (!oldData?.pages?.length) return oldData;
+          // Batch the cache update
+          scheduleBatchUpdate(() => {
+            queryClient.setQueryData(
+              queryKeys.messages.messages(recipientId),
+              (oldData: any) => {
+                if (!oldData?.pages?.length) return oldData;
 
-              // Add the new message to the FIRST page at the BEGINNING (newest first order)
-              const newPages = [...oldData.pages];
-              newPages[0] = {
-                ...newPages[0],
-                messages: [payload.new, ...newPages[0].messages]
-              };
+                // Add the new message to the FIRST page at the BEGINNING (newest first order)
+                const newPages = [...oldData.pages];
+                newPages[0] = {
+                  ...newPages[0],
+                  messages: [payload.new, ...newPages[0].messages]
+                };
 
-              return { ...oldData, pages: newPages };
+                return { ...oldData, pages: newPages };
+              }
+            );
+
+            // Mark message as delivered automatically (debounced)
+            if (payload.new.status === 'sent') {
+              messagesAPI.markAsDelivered(payload.new.id).catch(() => {
+                // Handle delivery marking error silently in production
+              });
             }
-          );
-
-          // Mark message as delivered automatically (debounced)
-          if (payload.new.status === 'sent') {
-            messagesAPI.markAsDelivered(payload.new.id).catch(() => {
-              // Handle delivery marking error silently in production
-            });
-          }
+          });
         }
       )
 
@@ -560,24 +582,26 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
         (payload) => {
           // Message status updated
 
-          // Optimized cache update for status changes
-          queryClient.setQueryData(
-            queryKeys.messages.messages(recipientId),
-            (oldData: any) => {
-              if (!oldData?.pages?.length) return oldData;
+          // Batch the cache update
+          scheduleBatchUpdate(() => {
+            queryClient.setQueryData(
+              queryKeys.messages.messages(recipientId),
+              (oldData: any) => {
+                if (!oldData?.pages?.length) return oldData;
 
-              const newPages = oldData.pages.map((page: any) => ({
-                ...page,
-                messages: page.messages.map((msg: any) =>
-                  msg.id === payload.new.id
-                    ? { ...msg, status: payload.new.status, delivered_at: payload.new.delivered_at, read_at: payload.new.read_at }
-                    : msg
-                )
-              }));
+                const newPages = oldData.pages.map((page: any) => ({
+                  ...page,
+                  messages: page.messages.map((msg: any) =>
+                    msg.id === payload.new.id
+                      ? { ...msg, status: payload.new.status, delivered_at: payload.new.delivered_at, read_at: payload.new.read_at }
+                      : msg
+                  )
+                }));
 
-              return { ...oldData, pages: newPages };
-            }
-          );
+                return { ...oldData, pages: newPages };
+              }
+            );
+          });
         }
       )
       .on(
@@ -586,11 +610,13 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
           event: '*',
           schema: 'public',
           table: 'message_reactions',
+          // OPTIMIZED: Add filter to only listen to reactions for this conversation
+          filter: `message_id=in.(${messageIds.slice(0, 50).join(',')})`, // Limit to first 50 messages
         },
         (payload) => {
           // Message reaction updated
 
-          // Optimized reaction handling - only update specific message
+          // OPTIMIZED: More aggressive debouncing for reactions (visual enhancement, not critical)
           if ((payload.new as any)?.message_id || (payload.old as any)?.message_id) {
             const messageId = (payload.new as any)?.message_id || (payload.old as any)?.message_id;
             
@@ -622,7 +648,7 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
               }).catch(() => {
                 // Handle reaction fetch error silently in production
               });
-            }, 100); // 100ms debounce
+            }, 300); // Increased from 100ms to 300ms
           }
         }
       )
@@ -630,6 +656,12 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
 
     // Cleanup subscriptions and timeouts
     return () => {
+      // Process any remaining batched updates before cleanup
+      if (batchTimeout) {
+        clearTimeout(batchTimeout);
+        processBatch();
+      }
+      
       // Cleaning up Supabase real-time subscriptions
       chatChannel.unsubscribe();
       
@@ -637,35 +669,12 @@ const CustomChatContainer: React.FC<CustomChatContainerProps> = ({
       Object.values(reactionTimeouts.current).forEach(timeout => clearTimeout(timeout));
       reactionTimeouts.current = {};
     };
-  }, [userId, recipientId, queryClient]);
+  }, [userId, recipientId, queryClient, messageIds]);
 
-  // Mark unread messages as read when chat is opened (only once)
-  const markedAsReadRef = useRef(new Set<string>());
-
-  useEffect(() => {
-    if (!userId || !recipientId || !messages.length) return;
-
-    // Find unread messages from the other user that haven't been marked yet
-    const unreadMessages = messages.filter((msg: any) =>
-      (msg as any).sender_id === recipientId &&
-      (msg as any).status !== 'read' &&
-      !(msg as any).is_read &&
-      !(msg as any).id.startsWith('temp_') &&
-      !markedAsReadRef.current.has((msg as any).id)
-    );
-
-    if (unreadMessages.length > 0) {
-      // Marking new messages as read
-
-      // Mark each unread message as read (only once)
-      unreadMessages.forEach((msg: any) => {
-        markedAsReadRef.current.add((msg as any).id); // Track that we've marked this message
-        setTimeout(() => {
-          markAsRead((msg as any).id);
-        }, 500); // Small delay to simulate reading
-      });
-    }
-  }, [messages, userId, recipientId, markAsRead]);
+  // OPTIMIZED: Mark as read is now handled ONLY in ChatScreenContent.tsx
+  // Removed duplicate system to avoid redundant API calls and race conditions
+  // The useFocusEffect in ChatScreenContent handles marking messages as read
+  // when the chat screen is focused, which is more efficient
 
   // Handle sending messages
   const handleSendMessage = useCallback(async (content: string, replyToMessageId?: string) => {

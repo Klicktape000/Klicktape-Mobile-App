@@ -1329,6 +1329,11 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
                       keyExtractor={(item) => item.id}
                       style={styles.repliesList}
                       showsVerticalScrollIndicator={false}
+                      // Instagram-style nested list optimization
+                      removeClippedSubviews={true}
+                      maxToRenderPerBatch={3}
+                      windowSize={5}
+                      initialNumToRender={5}
                     />
                   </View>
                 )}
@@ -1579,6 +1584,17 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
                   style={styles.commentsList}
                   contentContainerStyle={styles.commentsListContent}
                   showsVerticalScrollIndicator={false}
+                  // Instagram-style FlatList optimizations for 60 FPS
+                  removeClippedSubviews={true}
+                  maxToRenderPerBatch={5}
+                  windowSize={7}
+                  initialNumToRender={10}
+                  updateCellsBatchingPeriod={50}
+                  getItemLayout={(data, index) => ({
+                    length: 120, // Estimated comment height
+                    offset: 120 * index,
+                    index,
+                  })}
                 />
               )}
             </View>
