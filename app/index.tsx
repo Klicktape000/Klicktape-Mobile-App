@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { View, ActivityIndicator, Platform } from 'react-native';
-import { Redirect, router } from 'expo-router';
+import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/lib/authContext';
 import { getUserProfileData, getAuthRedirectPath } from '@/lib/profileUtils';
@@ -12,7 +12,6 @@ export default function Index() {
   const { user, isAuthenticated, authLoading } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [showSplash, setShowSplash] = useState(true);
-  const [redirectPath, setRedirectPath] = useState<string | null>(null);
 
   // Initialize app after auth context is ready
   useEffect(() => {
@@ -69,17 +68,33 @@ export default function Index() {
 
           // Determine where to redirect the user based on profile completion
           const redirectPath = await getAuthRedirectPath(user.id, user.email);
-          setRedirectPath(redirectPath);
+          
+          // Use router.replace instead of setting state for more reliable Android navigation
+          if (redirectPath) {
+            setIsLoading(false);
+            router.replace(redirectPath as any);
+            return;
+          }
+          
+          // Default fallback for authenticated users
+          setIsLoading(false);
+          router.replace('/(root)/(tabs)/home');
+          return;
         } else {
-          // User is not authenticated
-          setRedirectPath(null);
+          // User is not authenticated - redirect to sign-in
+          setIsLoading(false);
+          router.replace('/(auth)/sign-in');
+          return;
         }
       } catch (__error) {
         console.error("❌ Error in app initialization:", __error);
-        // Default to create-profile for safety if authenticated, otherwise null
-        setRedirectPath(isAuthenticated ? '/(root)/create-profile' : null);
-      } finally {
         setIsLoading(false);
+        // Default to create-profile for safety if authenticated, otherwise sign-in
+        if (isAuthenticated) {
+          router.replace('/(root)/create-profile');
+        } else {
+          router.replace('/(auth)/sign-in');
+        }
       }
     };
 
@@ -103,20 +118,10 @@ export default function Index() {
     }
     
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#000000" }}>
         <ActivityIndicator size="large" color="#007AFF" />
       </View>
     );
-  }
-
-  // Handle redirects
-  if (redirectPath) {
-    return <Redirect href={redirectPath as any} />;
-  }
-
-  // If not authenticated, redirect to sign-in screen
-  if (!isAuthenticated) {
-    return <Redirect href="/(auth)/sign-in" />;
   }
 
   // For web platform, don't redirect to tabs - let Expo Router handle the current URL
@@ -125,7 +130,12 @@ export default function Index() {
     return null;
   }
 
-  // Default fallback for mobile platforms
-  return <Redirect href="/(root)/(tabs)/home" />;
+  // Show a loading screen while navigation is happening
+  // Navigation is handled in useEffect via router.replace()
+  return (
+    <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#000000" }}>
+      <ActivityIndicator size="large" color="#007AFF" />
+    </View>
+  );
 }
 

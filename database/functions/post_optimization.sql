@@ -259,8 +259,63 @@ END;
 $$;
 
 -- ============================================================================
--- GRANT PERMISSIONS
+-- 6. GET EXPLORE POSTS (Optimized for discovery)
 -- ============================================================================
+
+CREATE OR REPLACE FUNCTION get_explore_posts_optimized(
+    p_user_id UUID DEFAULT NULL,
+    p_limit INTEGER DEFAULT 30,
+    p_offset INTEGER DEFAULT 0
+)
+RETURNS TABLE (
+    id UUID,
+    user_id UUID,
+    caption TEXT,
+    image_urls TEXT[],
+    created_at TIMESTAMPTZ,
+    likes_count INTEGER,
+    comments_count INTEGER,
+    username TEXT,
+    avatar_url TEXT,
+    is_liked BOOLEAN,
+    is_bookmarked BOOLEAN
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        p.id,
+        p.user_id,
+        p.caption,
+        p.image_urls,
+        p.created_at,
+        p.likes_count,
+        p.comments_count,
+        pr.username,
+        pr.avatar_url,
+        CASE
+            WHEN p_user_id IS NOT NULL THEN
+                EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = p_user_id)
+            ELSE FALSE
+        END as is_liked,
+        CASE
+            WHEN p_user_id IS NOT NULL THEN
+                EXISTS(SELECT 1 FROM bookmarks b WHERE b.post_id = p.id AND b.user_id = p_user_id)
+            ELSE FALSE
+        END as is_bookmarked
+    FROM posts p
+    JOIN profiles pr ON p.user_id = pr.id
+    -- Explore: prioritize high engagement then recency
+    ORDER BY p.likes_count DESC, p.created_at DESC
+    LIMIT p_limit
+    OFFSET p_offset;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_explore_posts_optimized(UUID, INTEGER, INTEGER) TO authenticated;
+GRANT EXECUTE ON FUNCTION get_explore_posts_optimized(UUID, INTEGER, INTEGER) TO anon;
 
 GRANT EXECUTE ON FUNCTION get_complete_post_data(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION get_post_comments(UUID, INTEGER, INTEGER) TO authenticated;
@@ -274,4 +329,5 @@ GRANT EXECUTE ON FUNCTION get_post_comments(UUID, INTEGER, INTEGER) TO anon;
 GRANT EXECUTE ON FUNCTION get_feed_posts(UUID, INTEGER, INTEGER) TO anon;
 GRANT EXECUTE ON FUNCTION get_user_posts(UUID, UUID, INTEGER, INTEGER) TO anon;
 GRANT EXECUTE ON FUNCTION prefetch_posts_data(UUID[], UUID) TO anon;
+
 

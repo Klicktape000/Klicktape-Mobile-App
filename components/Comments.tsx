@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import * as Haptics from "expo-haptics";
 import {
   View,
   Text,
@@ -18,6 +19,7 @@ import { useTheme } from "@/src/context/ThemeContext";
 import CachedImage from "@/components/CachedImage";
 import CommentsSkeleton from "@/components/skeletons/CommentsSkeleton";
 import { SupabaseNotificationBroadcaster } from "@/lib/supabaseNotificationManager";
+import { useAuth } from "@/lib/authContext";
 import { useRouter } from "expo-router";
 import CommentEditModal from "@/components/CommentEditModal";
 import CommentPinButton from "@/components/CommentPinButton";
@@ -30,7 +32,6 @@ interface Comment {
   parent_comment_id: string | null;
   parent_id?: string | null; // Alternative field name used in some queries
   created_at: string;
-  updated_at?: string;
   likes_count: number;
   replies_count?: number;
   user: {
@@ -62,8 +63,19 @@ interface CommentsModalProps {
 const CommentsModal: React.FC<CommentsModalProps> = React.memo(
   function CommentsModal({ entityType, entityId, onClose, entityOwnerUsername, entityOwnerId, visible }) {
     const { colors, isDarkMode } = useTheme();
+    const { user: authUser } = useAuth();
     const router = useRouter();
     const insets = useSafeAreaInsets();
+
+    // Standardize user object for internal use
+    const user = useMemo(() => {
+      if (!authUser) return null;
+      return {
+        id: authUser.id,
+        username: authUser.username || authUser.email?.split('@')[0] || "User",
+        avatar: authUser.avatar_url || "https://via.placeholder.com/40",
+      };
+    }, [authUser]);
 
     // Memoize colors to prevent unnecessary re-renders
     const memoizedColors = useMemo(() => colors, [colors.text, colors.background, colors.primary]);
@@ -72,7 +84,8 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
     const [replyingTo, setReplyingTo] = useState<Comment | null>(null);
     const [loading, setLoading] = useState(false);
     const [submitting, setSubmitting] = useState(false);
-    const [user, setUser] = useState<any>(null);
+    // Remove redundant local user state
+    // const [user, setUser] = useState<any>(null);
     const [mentionedUsers, setMentionedUsers] = useState<
       { id: string; username: string }[]
     >([]);
@@ -106,82 +119,23 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
       if (visible && mentionInputRef.current) {
         mentionInputRef.current.focus();
       }
-      const getUserFromStorage = async () => {
+      
+      // Refresh auth state when modal opens to ensure user session is active
+      const checkAuth = async () => {
         try {
-          //// console.log(`👤 Loading user data...`);
-          const userData = await AsyncStorage.getItem("user");
-          if (userData) {
-            const parsedUser = JSON.parse(userData);
-            //// console.log(`👤 Found user in storage:`, parsedUser.id);
-
-            if (!supabase) {
-              // console.error("❌ Supabase not available for user loading");
-              // Set a basic user object so comments can still load
-              setUser({
-                ...parsedUser,
-                username: parsedUser.username || "Unknown",
-                avatar: "https://via.placeholder.com/40",
-              });
-              return;
+          if (visible && !authUser) {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session) {
+              // Context will pick it up, but we can log for debug
+              //// console.log("👤 Session found on modal open");
             }
-
-            let { data: userFromDB, error } = await supabase
-              .from("profiles")
-              .select("id, username, avatar_url")
-              .eq("id", parsedUser.id)
-              .single();
-
-            if (error || !userFromDB) {
-              //// console.log(`👤 User not found in DB, creating profile...`);
-              const username = `user_${Math.random()
-                .toString(36)
-                .substring(2, 10)}`;
-              const { data: newProfile, error: insertError } = await (supabase
-                .from("profiles") as any)
-                .insert({
-                  id: parsedUser.id,
-                  username,
-                  avatar_url: "",
-                })
-                .select()
-                .single();
-
-              if (insertError || !newProfile) {
-                // console.error("❌ Failed to create user profile:", insertError?.message);
-                // Set a fallback user so comments can still load
-                setUser({
-                  ...parsedUser,
-                  username: username,
-                  avatar: "https://via.placeholder.com/40",
-                });
-                return;
-              }
-              userFromDB = newProfile;
-            }
-
-            const updatedUser = {
-              ...parsedUser,
-              username: (userFromDB as any)?.username || "Unknown",
-              avatar: (userFromDB as any)?.avatar_url || "https://via.placeholder.com/40",
-            };
-            //// console.log(`✅ User loaded successfully:`, {
-// //   username: updatedUser.username,
-// //   avatar: updatedUser.avatar,
-// //   hasAvatar: !!updatedUser.avatar
-// // });
-            setUser(updatedUser);
-            await AsyncStorage.setItem("user", JSON.stringify(updatedUser));
-          } else {
-            //// console.log(`👤 No user data found in storage`);
           }
         } catch (__error) {
-          // console.error("❌ Error getting user from storage:", error);
-          // Don't let user loading errors block the component
+          // Silent catch
         }
       };
-
-      getUserFromStorage();
-    }, [visible]);
+      checkAuth();
+    }, [visible, authUser]);
 
     // Define fetchLikeStatus before it's used in useEffect
     const fetchLikeStatus = useCallback(async (commentsToCheck: Comment[]) => {
@@ -190,19 +144,25 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
       try {
         const commentIds = commentsToCheck.map(c => c.id);
         const { data: likes } = await supabase
-          .from('comment_likes')
+          .from(likeTable)
           .select('comment_id')
           .eq('user_id', user.id)
           .in('comment_id', commentIds);
 
         if (likes) {
-          const likedIds = new Set(likes.map((like: { comment_id: string }) => like.comment_id));
+          const likedIdsArray = likes.map((like: { comment_id: string }) => like.comment_id);
+          const likedIds = new Set(likedIdsArray);
           setLikedComments(likedIds);
+          
+          // Cache liked status for instant opening next time
+          try {
+            await AsyncStorage.setItem(`${cacheKey}_liked_ids`, JSON.stringify(likedIdsArray));
+          } catch {}
         }
       } catch (__error) {
         // console.error("Error fetching like status:", error);
       }
-    }, [user?.id]);
+    }, [user?.id, cacheKey, likeTable]);
 
     // Define nestComments before it's used in fetchComments
     const nestComments = useCallback((comments: Comment[]): Comment[] => {
@@ -263,9 +223,8 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
             id,
             content,
             user_id,
-            parent_id,
+            parent_comment_id,
             created_at,
-            updated_at,
             likes_count,
             edited_at,
             is_edited,
@@ -276,7 +235,6 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
               id,
               username,
               full_name,
-              avatar,
               avatar_url
             )
           `)
@@ -294,10 +252,9 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
             id: comment.id,
             content: comment.content,
             user_id: comment.user_id,
-            parent_comment_id: comment.parent_id,
-            parent_id: comment.parent_id, // Keep both for compatibility
+            parent_comment_id: comment.parent_comment_id,
+            parent_id: comment.parent_comment_id, // Keep both for compatibility
             created_at: comment.created_at,
-            updated_at: comment.updated_at,
             likes_count: comment.likes_count || 0, // Initialize to 0 if null
             edited_at: comment.edited_at,
             is_edited: comment.is_edited,
@@ -308,7 +265,7 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
               id: comment.profiles.id,
               username: comment.profiles.username,
               full_name: comment.profiles.full_name,
-              avatar: comment.profiles.avatar,
+              avatar: comment.profiles.avatar_url,
               avatar_url: comment.profiles.avatar_url,
             } : null,
             replies: [],
@@ -378,14 +335,13 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
     useEffect(() => {
       if (entityId && visible) {
         const loadComments = async () => {
-          setLoading(true);
           //// console.log(`🚀 Starting to load comments for ${entityType} ${entityId}`);
 
           try {
             // Load cached timestamp
-            const cachedTimestamp = await AsyncStorage.getItem(`${cacheKey}_timestamp`);
-            if (cachedTimestamp) {
-              cacheTimestamp.current = parseInt(cachedTimestamp);
+            const cachedTimestampStr = await AsyncStorage.getItem(`${cacheKey}_timestamp`);
+            if (cachedTimestampStr) {
+              cacheTimestamp.current = parseInt(cachedTimestampStr);
             }
 
             const cachedComments = await AsyncStorage.getItem(cacheKey);
@@ -396,22 +352,36 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
                 const comments = parsed.comments || parsed;
                 //// console.log(`📦 Loaded ${comments.length} comments from cache`);
                 setComments(comments);
-                // Note: Like status will be fetched separately when user is loaded
+                
+                // Also try to load cached liked IDs for instant heart display
+                try {
+                  const cachedLikedIds = await AsyncStorage.getItem(`${cacheKey}_liked_ids`);
+                  if (cachedLikedIds) {
+                    const likedIdsArray = JSON.parse(cachedLikedIds);
+                    setLikedComments(new Set(likedIdsArray));
+                  }
+                } catch {}
+
+                setLoading(false); // Show cached comments immediately without skeleton
+                // Note: Like status will be refetched in background
               } catch (__error) {
                 console.error("Error parsing cached comments:", __error);
                 // Clear corrupted cache
                 await AsyncStorage.removeItem(cacheKey);
                 await AsyncStorage.removeItem(`${cacheKey}_timestamp`);
+                setLoading(true); // Need to show loading if cache is corrupted
               }
+            } else {
+              setLoading(true); // No cache, show loading
             }
 
             //// console.log(`🔄 Fetching fresh comments from database`);
-            await fetchComments();
+            await fetchComments(false); // Force fresh fetch
             //// console.log(`✅ Comments loading completed successfully`);
           } catch (__error) {
             console.error("Error loading comments from cache:", __error);
             try {
-              await fetchComments();
+              await fetchComments(false);
             } catch (__fetchError) {
               console.error("Error in fallback fetchComments:", __fetchError);
               Alert.alert("Error", "Failed to load comments. Please try again.");
@@ -525,29 +495,23 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
       }
     }, [entityId, entityType, entityTable]);
 
-    const validateEntityId = async () => {
-      if (!supabase) {
-        throw new Error("Supabase client not available");
-      }
-
-      const { data, error } = await supabase
-        .from(entityTable)
-        .select("id")
-        .eq("id", entityId)
-        .single();
-
-      if (error || !data) {
-        // console.error(`${entityType} ID validation error:`, entityId, error);
-        throw new Error(
-          `Cannot add comment: ${entityType} with ID ${entityId} does not exist.`
-        );
-      }
-      return true;
-    };
-
     const handleAddComment = async () => {
       if (!newComment.trim()) return;
-      if (!user) {
+      
+      // Fallback auth check if context hasn't updated yet
+      let currentUser = user;
+      if (!currentUser) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          currentUser = {
+            id: session.user.id,
+            username: session.user.user_metadata?.username || session.user.email?.split('@')[0] || "User",
+            avatar: session.user.user_metadata?.avatar_url || "https://via.placeholder.com/40",
+          };
+        }
+      }
+
+      if (!currentUser) {
         Alert.alert("Error", "You must be logged in to comment.");
         return;
       }
@@ -556,130 +520,200 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
         return;
       }
 
+      // Add instant haptic feedback
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
       setSubmitting(true);
       try {
-        await validateEntityId();
-        const mentionData = mentionedUsers.map((user) => ({
-          user_id: user.id,
-          username: user.username,
-        }));
-
-        const { data: newCommentData, error: insertError } = await (supabase
-          .from(table) as any)
-          .insert({
-            [`${entityType}_id`]: entityId,
-            user_id: user.id,
-            content: newComment.trim(),
-            parent_comment_id: replyingTo ? replyingTo.id : null,
-            created_at: new Date().toISOString(),
-            likes_count: 0,
-            replies_count: 0,
-            mentions: mentionData,
-          })
-          .select()
-          .single();
-
-        if (insertError) throw insertError;
-
-        // Create notification for the post/reel owner
-        try {
-          const { data: entity, error: entityError } = await supabase
-            .from(entityTable)
-            .select("user_id")
-            .eq("id", entityId)
-            .single();
-
-          // Only use the broadcaster to create notifications (no direct database insert)
-          if (!entityError && entity && (entity as any).user_id !== user.id) {
-            try {
-              await SupabaseNotificationBroadcaster.broadcastComment(
-                (entity as any).user_id,
-                user.id,
-                newCommentData.id,
-                entityType === 'post' ? entityId : undefined,
-                entityType === 'reel' ? entityId : undefined
-              );
-            } catch (__broadcastError) {
-              // console.error("Error broadcasting comment notification:", broadcastError);
-              // Don't throw - comment was created successfully
-            }
-          }
-        } catch (__notificationError) {
-          // console.error("Error creating comment notification:", notificationError);
-          // Don't throw - comment was created successfully
-        }
-
-        // Note: Comment count is now automatically updated by database triggers
-        // No need to manually update comments_count
-
-        if (replyingTo) {
-          const { data: parentComment, error: parentError } = await supabase
-            .from(table)
-            .select("replies_count")
-            .eq("id", replyingTo.id)
-            .single();
-
-          if (parentError || !parentComment)
-            throw new Error("Parent comment not found");
-
-          await (supabase
-            .from(table) as any)
-            .update({ replies_count: ((parentComment as any).replies_count || 0) + 1 })
-            .eq("id", replyingTo.id);
-
-          // Create notification for the parent comment owner
-          if ((parentComment as any).user_id !== user.id) {
-            try {
-              await SupabaseNotificationBroadcaster.broadcastComment(
-                (parentComment as any).user_id,
-                user.id,
-                newCommentData.id,
-                entityType === 'post' ? entityId : undefined,
-                entityType === 'reel' ? entityId : undefined
-              );
-            } catch (__notificationError) {
-              // console.error("Error creating reply notification:", notificationError);
-              // Don't throw - comment was created successfully
-            }
-          }
-        }
-
-        const newCommentWithUser: Comment = {
-          ...newCommentData,
+        // Optimistic UI update first - add comment immediately
+        const tempId = `temp_${Date.now()}`;
+        const tempComment: Comment = {
+          id: tempId,
+          content: newComment.trim(),
+          user_id: currentUser.id,
+          parent_comment_id: replyingTo ? replyingTo.id : null,
+          created_at: new Date().toISOString(),
+          likes_count: 0,
+          replies_count: 0,
           user: {
-            username: user.username || "Unknown",
-            avatar: user.avatar || "https://via.placeholder.com/40",
+            username: currentUser.username || "Unknown",
+            avatar: currentUser.avatar || "https://via.placeholder.com/40",
+            avatar_url: currentUser.avatar || "https://via.placeholder.com/40",
           },
           replies: [],
+          mentions: mentionedUsers.map(u => ({ user_id: u.id, username: u.username })),
         };
 
-        let updatedComments = [...comments];
+        // Update UI immediately
+        let optimisticComments = [...comments];
         if (replyingTo) {
-          updatedComments = updatedComments.map((comment) => {
+          optimisticComments = optimisticComments.map((comment) => {
             if (comment.id === replyingTo.id) {
               return {
                 ...comment,
-                replies: [...(comment.replies || []), newCommentWithUser],
+                replies: [...(comment.replies || []), tempComment],
                 replies_count: (comment.replies_count || 0) + 1,
               };
             }
             return comment;
           });
         } else {
-          updatedComments.push(newCommentWithUser);
+          optimisticComments.push(tempComment);
         }
+        setComments(optimisticComments);
 
-        setComments(updatedComments);
-        await AsyncStorage.setItem(cacheKey, JSON.stringify(updatedComments));
-
-        setMentionedUsers([]);
+        // Clear input immediately for better UX
+        const commentText = newComment.trim();
+        const replyToComment = replyingTo;
+        const mentions = mentionedUsers;
+        const currentUserId = currentUser.id;
         setNewComment("");
         setReplyingTo(null);
+        setMentionedUsers([]);
         setShowMentionsList(false);
-      } catch (__error) {
-        // console.error(`Error adding ${entityType} comment:`, error);
+        setSubmitting(false); // Set to false immediately so user can type another comment
+
+        // Do all database operations in background (non-blocking)
+        (async () => {
+          try {
+            const mentionData = mentions.map((u) => ({
+              user_id: u.id,
+              username: u.username,
+            }));
+
+            const { data: newCommentData, error: insertError } = await (supabase
+              .from(table) as any)
+              .insert({
+                [`${entityType}_id`]: entityId,
+                user_id: currentUserId,
+                content: commentText,
+                parent_comment_id: replyToComment ? replyToComment.id : null,
+                likes_count: 0,
+                replies_count: 0,
+                mentions: mentionData,
+              })
+              .select(`
+                id,
+                content,
+                user_id,
+                parent_comment_id,
+                created_at,
+                likes_count,
+                edited_at,
+                is_edited,
+                is_pinned,
+                pinned_at,
+                pinned_by
+              `)
+              .single();
+
+            if (insertError) {
+              // If we get an updated_at error, it's a database trigger issue
+              if (insertError.message?.includes('updated_at')) {
+                console.error("❌ Database Trigger Error: Your 'comments' table likely has a trigger trying to set 'updated_at' but the column is missing.");
+              }
+              throw insertError;
+            }
+
+            // Replace temp comment with real one
+            const replaceComment = (comments: Comment[]): Comment[] => {
+              return comments.map((comment) => {
+                if (comment.id === tempId) {
+                  return { ...newCommentData, user: tempComment.user, replies: [] };
+                }
+                if (comment.replies && comment.replies.length > 0) {
+                  return { ...comment, replies: replaceComment(comment.replies) };
+                }
+                return comment;
+              });
+            };
+
+            const updatedComments = replaceComment(optimisticComments);
+            setComments(updatedComments);
+            await AsyncStorage.setItem(cacheKey, JSON.stringify(updatedComments));
+
+            // Send notifications in background (don't await)
+            Promise.all([
+              // Notify post/reel owner
+              (async () => {
+                try {
+                  const { data: entity } = await supabase
+                    .from(entityTable)
+                    .select("user_id")
+                    .eq("id", entityId)
+                    .single();
+
+                  if (entity && (entity as any).user_id !== currentUserId) {
+                    await SupabaseNotificationBroadcaster.broadcastComment(
+                      (entity as any).user_id,
+                      currentUserId,
+                      newCommentData.id,
+                      entityType === 'post' ? entityId : undefined,
+                      entityType === 'reel' ? entityId : undefined
+                    );
+                  }
+                } catch {}
+              })(),
+              
+              // Handle reply notifications and count update
+              replyToComment ? (async () => {
+                try {
+                  const { data: parentComment } = await supabase
+                    .from(table)
+                    .select("user_id, replies_count")
+                    .eq("id", replyToComment.id)
+                    .single();
+
+                  if (parentComment) {
+                    // Update replies count - wrapping in try/catch to prevent updated_at trigger failure from crashing the app
+                    try {
+                      const { error: updateError } = await (supabase.from(table) as any)
+                        .update({ replies_count: ((parentComment as any).replies_count || 0) + 1 })
+                        .eq("id", replyToComment.id);
+                      
+                      if (updateError) {
+                        if (updateError.message?.includes('updated_at')) {
+                          console.warn("⚠️ Warning: replies_count update failed due to missing updated_at column in database trigger.");
+                        } else {
+                          console.error("Error updating replies count:", updateError);
+                        }
+                      }
+                    } catch (__updateError) {
+                      // Silent catch for trigger errors
+                    }
+
+                    // Notify parent comment owner
+                    if ((parentComment as any).user_id !== currentUserId) {
+                      await SupabaseNotificationBroadcaster.broadcastComment(
+                        (parentComment as any).user_id,
+                        currentUserId,
+                        newCommentData.id,
+                        entityType === 'post' ? entityId : undefined,
+                        entityType === 'reel' ? entityId : undefined
+                      );
+                    }
+                  }
+                } catch {}
+              })() : Promise.resolve()
+            ]).catch(() => {}); // Silently fail - comment was already added
+
+          } catch (error: any) {
+            console.error(`Error saving comment to database:`, error);
+            // Revert optimistic update
+            setComments(comments);
+            
+            let errorMsg = `Failed to save ${entityType} comment.`;
+            if (error.message?.includes('updated_at')) {
+              errorMsg = "Database configuration error: 'updated_at' column is missing but a trigger is trying to use it. Please contact support.";
+            }
+            
+            Alert.alert("Error", errorMsg);
+          }
+        })();
+
+      } catch (error) {
+        console.error(`Error adding ${entityType} comment:`, error);
         Alert.alert("Error", `Failed to add ${entityType} comment.`);
-      } finally {
         setSubmitting(false);
       }
     };
@@ -757,15 +791,24 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
                   if (parentError || !parentComment)
                     throw new Error("Parent comment not found");
 
-                  await (supabase
-                    .from(table) as any)
-                    .update({
-                      replies_count: Math.max(
-                        0,
-                        ((parentComment as any).replies_count || 0) - 1
-                      ),
-                    })
-                    .eq("id", parentCommentId);
+                  // Wrap in try/catch to prevent updated_at trigger failure from crashing the app
+                  try {
+                    const { error: updateError } = await (supabase
+                      .from(table) as any)
+                      .update({
+                        replies_count: Math.max(
+                          0,
+                          ((parentComment as any).replies_count || 0) - 1
+                        ),
+                      })
+                      .eq("id", parentCommentId);
+                    
+                    if (updateError && updateError.message?.includes('updated_at')) {
+                      console.warn("⚠️ Warning: replies_count update failed due to missing updated_at column in database trigger.");
+                    }
+                  } catch (__updateError) {
+                    // Silent catch for trigger errors
+                  }
                 }
 
                 let updatedComments = [...comments];
@@ -1520,10 +1563,16 @@ const CommentsModal: React.FC<CommentsModalProps> = React.memo(
           style={styles.modal}
           animationIn="slideInUp"
           animationOut="slideOutDown"
+          animationInTiming={300}
+          animationOutTiming={200}
+          backdropTransitionInTiming={300}
+          backdropTransitionOutTiming={200}
           backdropOpacity={0.5}
           onBackButtonPress={onClose}
           onBackdropPress={onClose}
           avoidKeyboard={true}
+          useNativeDriver={true}
+          hideModalContentWhileAnimating={true}
         >
           <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
             {/* Header */}

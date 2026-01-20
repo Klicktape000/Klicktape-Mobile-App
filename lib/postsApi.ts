@@ -12,61 +12,46 @@ export const postsAPI = {
   }) => {
     try {
       if(!supabase) throw new Error("Supabase client not initialized");
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-// console.log("Authenticated user:", user.id);
-
-      const fileExt = file.name?.split(".").pop()?.toLowerCase() || "jpg";
-      const fileName =
-        file.name ||
-        `post_${Date.now()}_${Math.floor(Math.random() * 1000000)}.${fileExt}`;
-
-      // Get current user ID for folder structure
+      
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         throw new Error("User not authenticated");
       }
 
+      const fileExt = "jpg";
+      const fileName = `post_${Date.now()}_${Math.floor(Math.random() * 1000000)}.${fileExt}`;
       const filePath = `${user.id}/${fileName}`;
 
-// console.log("Uploading file from URI:", file.uri);
-
+      // Normalize URI for Android
       let normalizedUri = file.uri;
       if (Platform.OS === "android" && !normalizedUri.startsWith("file://")) {
         normalizedUri = `file://${normalizedUri}`;
       }
 
+      // Use FormData directly - most reliable for React Native
       const formData = new FormData();
       formData.append("file", {
         uri: normalizedUri,
         name: fileName,
-        type: `image/${fileExt === "jpg" ? "jpeg" : fileExt}`,
+        type: "image/jpeg",
       } as any);
 
       const { error } = await supabase.storage
         .from("posts")
         .upload(filePath, formData, {
-          contentType: `image/${fileExt === "jpg" ? "jpeg" : fileExt}`,
+          contentType: "image/jpeg",
           upsert: false,
         });
 
       if (error) {
-        // Error: Storage upload error
-        throw new Error(`Failed to upload image: ${error.message}`);
+        console.error('Upload error:', error);
+        throw new Error(`Upload failed: ${error.message}`);
       }
 
       const { data } = supabase.storage.from("posts").getPublicUrl(filePath);
-
-      if (!data?.publicUrl) {
-        throw new Error("Failed to get public URL for uploaded image");
-      }
-
       return { fileId: filePath, url: data.publicUrl };
-    } catch (__error) {
-      // Error: Error uploading image
+    } catch (__error: any) {
+      console.error('Image upload failed:', __error);
       throw __error;
     }
   },
@@ -79,46 +64,52 @@ export const postsAPI = {
     genre?: string | null,
     hashtags?: string[],
     taggedUsers?: string[],
-    collaborators?: string[]
+    collaborators?: string[],
+    onProgress?: (progress: number) => void
   ) => {
     try {
-      // Check if user has a profile
-      let { data: profile, error: profileError } = await supabaseOptimizer.select(
-        'profiles',
-        (builder) => builder.select('id').eq('id', userId).single(),
-        {}
-      );
+      // Upload all images in parallel for maximum speed
+      const totalImages = imageFiles.length;
+      let uploadedCount = 0;
+      
+      const uploadPromises = imageFiles.map(async (file) => {
+        // Direct upload without extra auth check (userId already validated)
+        const fileExt = "jpg";
+        const fileName = `post_${Date.now()}_${Math.floor(Math.random() * 1000000)}.${fileExt}`;
+        const filePath = `${userId}/${fileName}`;
 
-      if (profileError || !profile) {
-        // Create a profile if it doesn't exist
-        const username = `user_${Math.random().toString(36).substring(2, 10)}`;
-        const { data: newProfile, error: insertError } = await (supabase
-          .from("profiles") as any)
-          .insert({
-            id: userId, // profiles.id = auth.users.id
-            username,
-            avatar_url: "",
-          })
-          .select()
-          .single();
-
-        if (insertError || !newProfile) {
-          throw new Error(`Failed to create user profile: ${insertError?.message}`);
+        let normalizedUri = file.uri;
+        if (Platform.OS === "android" && !normalizedUri.startsWith("file://")) {
+          normalizedUri = `file://${normalizedUri}`;
         }
-        profile = newProfile as any;
-      }
 
-      // Upload images
-      const uploadedFiles = await Promise.all(
-        imageFiles.map((file) => postsAPI.uploadImage(file))
-      );
-      const imageUrls = uploadedFiles.map((file) => file.url);
+        const formData = new FormData();
+        formData.append("file", {
+          uri: normalizedUri,
+          name: fileName,
+          type: "image/jpeg",
+        } as any);
 
-      // Create post with profiles.id
-      const { data, error } = await (supabase
-        .from("posts") as any)
+        const { error } = await supabase.storage
+          .from("posts")
+          .upload(filePath, formData, { contentType: "image/jpeg", upsert: false });
+
+        if (error) throw new Error(`Upload failed: ${error.message}`);
+
+        uploadedCount++;
+        if (onProgress) onProgress(Math.floor((uploadedCount / totalImages) * 80));
+
+        const { data } = supabase.storage.from("posts").getPublicUrl(filePath);
+        return data.publicUrl;
+      });
+      
+      const imageUrls = await Promise.all(uploadPromises);
+      if (onProgress) onProgress(85);
+
+      // Create post record
+      const { data, error } = await (supabase.from("posts") as any)
         .insert({
-          user_id: (profile as any)?.id, // profiles.id (same as auth.users.id)
+          user_id: userId,
           image_urls: imageUrls,
           caption,
           genre: genre || null,
@@ -133,9 +124,10 @@ export const postsAPI = {
         .single();
 
       if (error) throw error;
+      if (onProgress) onProgress(100);
+      
       return data;
     } catch (__error: any) {
-      // Error: Error creating post
       throw new Error(`Failed to create post: ${__error.message}`);
     }
   },

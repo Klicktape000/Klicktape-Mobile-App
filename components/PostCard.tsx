@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import {
   TouchableWithoutFeedback,
 } from 'react-native';
 import { AntDesign, Feather, MaterialIcons, Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '../src/context/ThemeContext';
 import CachedImage from './CachedImage';
@@ -58,97 +59,68 @@ const PostCard: React.FC<PostCardProps> = ({
   const [likesCount, setLikesCount] = useState(post.likes_count || 0);
   const [commentsCount, setCommentsCount] = useState(post.comments_count || 0);
   const [loading, setLoading] = useState(false);
+  
+  // Animation refs for instant feel
+  const likeScale = useRef(new Animated.Value(1)).current;
+  const saveScale = useRef(new Animated.Value(1)).current;
   const pauseStartTime = useRef<number | null>(null);
   const isPauseTracked = useRef(false);
 
+  // Track initial prop values to detect external changes
+  const prevPropsRef = useRef({ 
+    is_liked: post.is_liked, 
+    likes_count: post.likes_count 
+  });
+
   // Sync local state with prop changes (for real-time updates)
+  // IMPORTANT: Only update if props actually changed AND we're not processing
   useEffect(() => {
-    setIsLiked(post.is_liked || false);
-    setLikesCount(post.likes_count || 0);
-    setCommentsCount(post.comments_count || 0);
-    setIsSaved(post.is_bookmarked || false);
-  }, [post.is_liked, post.likes_count, post.comments_count, post.is_bookmarked]);
+    // Don't sync during loading to prevent overwriting optimistic updates
+    if (loading) return;
 
-  // **ZERO-SECOND LOADING**: Instantly prefetch post data when card becomes visible
-  useEffect(() => {
-    if (!user?.id) return;
+    // Only update if props have actually changed (not just re-render)
+    const propsChanged = 
+      prevPropsRef.current.is_liked !== post.is_liked ||
+      prevPropsRef.current.likes_count !== post.likes_count;
 
-    // IMMEDIATE prefetch (no delay) for instant navigation
-    prefetchPost(post.id, user.id);
-    
-    // Also prefetch user profile and comments for zero-loading
-    const prefetchComplete = async () => {
-      try {
-        // Prefetch post comments
-        await queryClient.prefetchQuery({
-          queryKey: ['post_comments', post.id, 20, 0],
-          queryFn: async () => {
-            const { data } = await supabase
-              .from('comments')
-              .select('*, user:profiles!comments_user_id_fkey(username, avatar_url)')
-              .eq('post_id', post.id)
-              .order('created_at', { ascending: false })
-              .range(0, 19);
-            return data || [];
-          },
-          staleTime: Infinity,
-        });
-
-        // Prefetch user profile
-        await queryClient.prefetchQuery({
-          queryKey: queryKeys.users.detail(post.user_id),
-          queryFn: async () => {
-            const { data } = await supabase
-              .from('profiles')
-              .select('*')
-              .eq('id', post.user_id)
-              .single();
-            return data;
-          },
-          staleTime: Infinity,
-        });
-      } catch (error) {
-        // Silent fail
-      }
-    };
-
-    prefetchComplete();
-  }, [post.id, post.user_id, user?.id, prefetchPost, queryClient]);
-
-  // Track user pause behavior for Instagram-style predictions
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const handleVisibilityChange = () => {
-      if (document.hidden && !isPauseTracked.current) {
-        // User paused on this post
-        if (pauseStartTime.current) {
-          const pauseDuration = Date.now() - pauseStartTime.current;
-          if (pauseDuration > 1000) { // Only track if paused for > 1 second
-            const optimizer = getOptimizer(queryClient, user.id);
-            optimizer.onPostPause({
-              postId: post.id,
-              pauseDuration,
-            });
-            isPauseTracked.current = true;
-          }
-        }
-      } else if (!document.hidden) {
-        // User resumed viewing
-        pauseStartTime.current = Date.now();
-        isPauseTracked.current = false;
-      }
-    };
-
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      pauseStartTime.current = Date.now();
-
-      return () => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
+    if (propsChanged) {
+      setIsLiked(post.is_liked || false);
+      setLikesCount(post.likes_count || 0);
+      
+      // Update prev refs
+      prevPropsRef.current = {
+        is_liked: post.is_liked,
+        likes_count: post.likes_count
       };
     }
+
+    // Always sync these (they don't have optimistic updates)
+    setCommentsCount(post.comments_count || 0);
+    setIsSaved(post.is_bookmarked || false);
+  }, [post.is_liked, post.likes_count, post.comments_count, post.is_bookmarked, loading]);
+
+  // **OPTIMIZED**: Only prefetch on initial mount, not every render
+  const hasPrefetched = useRef(false);
+  useEffect(() => {
+    if (!user?.id || hasPrefetched.current) return;
+    hasPrefetched.current = true;
+
+    // Prefetch in background after 100ms (don't block render)
+    const timer = setTimeout(() => {
+      prefetchPost(post.id, user.id).catch(() => {});
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [post.id, user?.id]);
+
+  // Track user pause behavior - DISABLED for performance
+  // This was causing unnecessary re-renders
+  /*
+  useEffect(() => {
+    if (!user?.id) return;
+    // ... pause tracking code removed for performance
   }, [user?.id, queryClient, post.id]);
+  */
 
   useEffect(() => {
     // Update follow status when prop changes
@@ -176,13 +148,38 @@ const PostCard: React.FC<PostCardProps> = ({
     }
   }, [checkFollowingStatus, post.is_user_followed]);
 
+  // Lock to prevent race conditions
+  const likeInProgress = useRef(false);
+  const saveInProgress = useRef(false);
+  const lastLikeTime = useRef(0);
+
   const handleLike = async () => {
     if (!user?.id) return;
     
-    // Don't block if already processing - allow rapid double-tap
-    if (loading) {
-      console.log('⚡ Like already in progress, queuing...');
-    }
+    // Prevent concurrent calls and debounce rapid taps (500ms)
+    const now = Date.now();
+    if (likeInProgress.current || now - lastLikeTime.current < 500) return;
+    likeInProgress.current = true;
+    lastLikeTime.current = now;
+    
+    // Immediate haptic feedback for "instant" feel
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    // POP ANIMATION: Scale up and then back to normal
+    Animated.sequence([
+      Animated.spring(likeScale, {
+        toValue: 1.2,
+        useNativeDriver: true,
+        speed: 50,
+        bounciness: 15,
+      }),
+      Animated.spring(likeScale, {
+        toValue: 1,
+        useNativeDriver: true,
+        speed: 50,
+        bounciness: 15,
+      }),
+    ]).start();
 
     // Optimistic update - update UI immediately
     const newIsLiked = !isLiked;
@@ -191,29 +188,36 @@ const PostCard: React.FC<PostCardProps> = ({
     setIsLiked(newIsLiked);
     setLikesCount(newLikesCount);
 
-    // Update cache immediately for instant feedback across all screens
-    queryClient.setQueriesData(
-      { queryKey: queryKeys.posts.all },
-      (oldData: any) => {
-        if (!oldData?.pages) return oldData;
+    // Update prev ref to prevent props from overwriting
+    prevPropsRef.current = {
+      is_liked: newIsLiked,
+      likes_count: newLikesCount
+    };
 
-        return {
-          ...oldData,
-          pages: oldData.pages.map((page: any) => ({
-            ...page,
-            posts: page.posts?.map((p: any) =>
-              p.id === post.id
-                ? { ...p, is_liked: newIsLiked, likes_count: newLikesCount }
-                : p
-            ) || []
-          }))
-        };
-      }
-    );
+    // Update cache in background to keep UI thread smooth
+    setTimeout(() => {
+      queryClient.setQueriesData(
+        { queryKey: queryKeys.posts.all },
+        (oldData: any) => {
+          if (!oldData?.pages) return oldData;
 
-    setLoading(true);
+          return {
+            ...oldData,
+            pages: oldData.pages.map((page: any) => ({
+              ...page,
+              posts: page.posts?.map((p: any) =>
+                p.id === post.id
+                  ? { ...p, is_liked: newIsLiked, likes_count: newLikesCount }
+                  : p
+              ) || []
+            }))
+          };
+        }
+      );
+    }, 0);
+
+    // No longer blocking with 'loading' state for the UI toggle
     try {
-      // Use fast RPC function instead of slow API
       const { data: result, error } = await supabase.rpc('lightning_toggle_like_v4', {
         post_id_param: post.id,
         user_id_param: user.id,
@@ -222,14 +226,19 @@ const PostCard: React.FC<PostCardProps> = ({
       if (error) throw error;
 
       // Verify the result matches our optimistic update
+      // Only update if it's different to avoid flicker
       if (result !== newIsLiked) {
-        // Revert if server returned different result
         setIsLiked(result);
         setLikesCount(prev => result ? prev + 1 : prev - 1);
+        prevPropsRef.current = {
+          is_liked: result,
+          likes_count: result ? likesCount + 1 : likesCount - 1
+        };
       }
 
       onLike?.(post.id, result);
     } catch (error) {
+      console.error('Like error:', error);
       // Revert optimistic update on error
       setIsLiked(!newIsLiked);
       setLikesCount(likesCount);
@@ -254,48 +263,115 @@ const PostCard: React.FC<PostCardProps> = ({
         }
       );
 
-      // console.error('Error toggling like:', error);
       Alert.alert('Error', 'Failed to update like status');
     } finally {
-      setLoading(false);
+      likeInProgress.current = false;
     }
   };
 
-  // Handle double tap - only like, never unlike
-  const handleDoubleTapLike = () => {
-    if (!isLiked) {
-      handleLike();
+  // Handle double tap - only like, never unlike (uses add-only function)
+  const handleDoubleTapLike = async () => {
+    if (!user?.id || likeInProgress.current) return;
+    
+    // Debounce rapid taps
+    const now = Date.now();
+    if (now - lastLikeTime.current < 500) return;
+    lastLikeTime.current = now;
+    likeInProgress.current = true;
+
+    // If already liked, just animate
+    if (isLiked) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      Animated.sequence([
+        Animated.spring(likeScale, { toValue: 1.3, useNativeDriver: true, speed: 50 }),
+        Animated.spring(likeScale, { toValue: 1, useNativeDriver: true, speed: 50 }),
+      ]).start();
+      likeInProgress.current = false;
+      return;
+    }
+
+    // Optimistic update
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setIsLiked(true);
+    setLikesCount(prev => prev + 1);
+    prevPropsRef.current = { is_liked: true, likes_count: likesCount + 1 };
+
+    Animated.sequence([
+      Animated.spring(likeScale, { toValue: 1.3, useNativeDriver: true, speed: 50 }),
+      Animated.spring(likeScale, { toValue: 1, useNativeDriver: true, speed: 50 }),
+    ]).start();
+
+    try {
+      // Use add-only function (never removes)
+      const { error } = await supabase.rpc('add_like_only', {
+        post_id_param: post.id,
+        user_id_param: user.id,
+      } as any);
+
+      if (error) throw error;
+      onLike?.(post.id, true);
+    } catch (error) {
+      console.error('Double tap like error:', error);
+      // Revert on error
+      setIsLiked(false);
+      setLikesCount(prev => prev - 1);
+    } finally {
+      likeInProgress.current = false;
     }
   };
 
   const handleSave = async () => {
-    if (!user?.id || loading) return;
+    if (!user?.id) return;
+
+    // Prevent concurrent calls (race condition fix)
+    if (saveInProgress.current) return;
+    saveInProgress.current = true;
+
+    // Immediate haptic feedback
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    // POP ANIMATION: Scale up and then back to normal
+    Animated.sequence([
+      Animated.spring(saveScale, {
+        toValue: 1.2,
+        useNativeDriver: true,
+        speed: 50,
+        bounciness: 15,
+      }),
+      Animated.spring(saveScale, {
+        toValue: 1,
+        useNativeDriver: true,
+        speed: 50,
+        bounciness: 15,
+      }),
+    ]).start();
 
     // Optimistic update - update UI immediately
     const newIsSaved = !isSaved;
     setIsSaved(newIsSaved);
 
-    // Update cache immediately for instant feedback across all screens
-    queryClient.setQueriesData(
-      { queryKey: queryKeys.posts.all },
-      (oldData: any) => {
-        if (!oldData?.pages) return oldData;
+    // Update cache in background to keep UI thread smooth
+    setTimeout(() => {
+      queryClient.setQueriesData(
+        { queryKey: queryKeys.posts.all },
+        (oldData: any) => {
+          if (!oldData?.pages) return oldData;
 
-        return {
-          ...oldData,
-          pages: oldData.pages.map((page: any) => ({
-            ...page,
-            posts: page.posts?.map((p: any) =>
-              p.id === post.id
-                ? { ...p, is_bookmarked: newIsSaved }
-                : p
-            ) || []
-          }))
-        };
-      }
-    );
+          return {
+            ...oldData,
+            pages: oldData.pages.map((page: any) => ({
+              ...page,
+              posts: page.posts?.map((p: any) =>
+                p.id === post.id
+                  ? { ...p, is_bookmarked: newIsSaved }
+                  : p
+              ) || []
+            }))
+          };
+        }
+      );
+    }, 0);
 
-    setLoading(true);
     try {
       // Use fast RPC function instead of slow API
       const { data: result, error } = await supabase.rpc('lightning_toggle_bookmark_v3', {
@@ -307,12 +383,12 @@ const PostCard: React.FC<PostCardProps> = ({
 
       // Verify the result matches our optimistic update
       if (result !== newIsSaved) {
-        // Revert if server returned different result
         setIsSaved(result);
       }
 
       onSave?.(post.id, result);
     } catch (error) {
+      console.error('Bookmark error:', error);
       // Revert optimistic update on error
       setIsSaved(!newIsSaved);
 
@@ -336,10 +412,9 @@ const PostCard: React.FC<PostCardProps> = ({
         }
       );
 
-      // console.error('Error toggling bookmark:', error);
       Alert.alert('Error', 'Failed to update bookmark status');
     } finally {
-      setLoading(false);
+      saveInProgress.current = false;
     }
   };
 
@@ -570,17 +645,18 @@ const PostCard: React.FC<PostCardProps> = ({
       {/* Actions */}
       <View style={styles.actionsContainer}>
         <View style={styles.leftActions}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleLike}
-            disabled={loading}
-          >
-            <Ionicons
-              name={isLiked ? 'heart' : 'heart-outline'}
-              size={24}
-              color={isLiked ? '#E91E63' : colors.text}
-            />
-          </TouchableOpacity>
+          <Animated.View style={{ transform: [{ scale: likeScale }] }}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={handleLike}
+            >
+              <Ionicons
+                name={isLiked ? 'heart' : 'heart-outline'}
+                size={24}
+                color={isLiked ? '#E91E63' : colors.text}
+              />
+            </TouchableOpacity>
+          </Animated.View>
           
           <TouchableOpacity
             style={styles.actionButton}
@@ -594,17 +670,18 @@ const PostCard: React.FC<PostCardProps> = ({
           </TouchableOpacity>
         </View>
         
-        <TouchableOpacity
-          style={styles.saveButton}
-          onPress={handleSave}
-          disabled={loading}
-        >
-          <Ionicons
-            name={isSaved ? 'bookmark' : 'bookmark-outline'}
-            size={24}
-            color={colors.text}
-          />
-        </TouchableOpacity>
+        <Animated.View style={{ transform: [{ scale: saveScale }] }}>
+          <TouchableOpacity
+            style={styles.saveButton}
+            onPress={handleSave}
+          >
+            <Ionicons
+              name={isSaved ? 'bookmark' : 'bookmark-outline'}
+              size={24}
+              color={colors.text}
+            />
+          </TouchableOpacity>
+        </Animated.View>
       </View>
 
       {/* Likes Count */}
@@ -638,4 +715,17 @@ const PostCard: React.FC<PostCardProps> = ({
   );
 };
 
-export default PostCard;
+// Memoized PostCard to prevent unnecessary re-renders
+const MemoizedPostCard = memo(PostCard, (prevProps, nextProps) => {
+  // Only re-render if these specific props change
+  return (
+    prevProps.post.id === nextProps.post.id &&
+    prevProps.post.is_liked === nextProps.post.is_liked &&
+    prevProps.post.is_bookmarked === nextProps.post.is_bookmarked &&
+    prevProps.post.likes_count === nextProps.post.likes_count &&
+    prevProps.post.comments_count === nextProps.post.comments_count &&
+    prevProps.post.is_user_followed === nextProps.post.is_user_followed
+  );
+});
+
+export default MemoizedPostCard;

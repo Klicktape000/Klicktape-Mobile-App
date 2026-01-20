@@ -57,7 +57,9 @@ RETURNS TABLE(
     username text,
     avatar_url text,
     user_view_count integer,
-    last_viewed_at timestamp with time zone
+    last_viewed_at timestamp with time zone,
+    is_liked boolean,
+    is_bookmarked boolean
 )
 LANGUAGE plpgsql
 AS $function$
@@ -75,7 +77,9 @@ BEGIN
         sfp.username,
         sfp.avatar_url,
         COALESCE(sfp.user_view_count, 0)::INTEGER,
-        sfp.last_viewed_at
+        sfp.last_viewed_at,
+        EXISTS(SELECT 1 FROM likes l WHERE l.post_id = sfp.id AND l.user_id = p_user_id) as is_liked,
+        EXISTS(SELECT 1 FROM bookmarks b WHERE b.post_id = sfp.id AND b.user_id = p_user_id) as is_bookmarked
     FROM smart_feed_posts sfp
     LEFT JOIN post_views pv ON sfp.id = pv.post_id AND pv.user_id = p_user_id
     WHERE 

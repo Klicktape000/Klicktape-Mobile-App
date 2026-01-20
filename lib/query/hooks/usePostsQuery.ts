@@ -92,17 +92,30 @@ const postsQueryFunctions = {
 
       if (fallbackError) throw fallbackError;
 
-      // Transform to include basic counts (less accurate but faster than N+1)
-      const transformedPosts = await Promise.all(
-        (posts || []).map(async (post: any) => ({
-          ...post,
-          user: post.profiles || { username: 'Unknown', avatar_url: '' },
-          likes_count: 0, // Will be updated by realtime
-          comments_count: 0,
-          is_liked: false,
-          is_bookmarked: false
-        }))
-      );
+      // Transform and fetch like/bookmark status for the current user
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      const postIds = (posts || []).map((p: any) => p.id);
+      
+      let likedPostIds = new Set<string>();
+      let bookmarkedPostIds = new Set<string>();
+      
+      if (currentUser?.id && postIds.length > 0) {
+        const [likesData, bookmarksData] = await Promise.all([
+          supabase.from('likes').select('post_id').eq('user_id', currentUser.id).in('post_id', postIds),
+          supabase.from('bookmarks').select('post_id').eq('user_id', currentUser.id).in('post_id', postIds)
+        ]);
+        likedPostIds = new Set(likesData.data?.map((l: any) => l.post_id) || []);
+        bookmarkedPostIds = new Set(bookmarksData.data?.map((b: any) => b.post_id) || []);
+      }
+      
+      const transformedPosts = (posts || []).map((post: any) => ({
+        ...post,
+        user: post.profiles || { username: 'Unknown', avatar_url: '' },
+        likes_count: post.likes_count || 0,
+        comments_count: post.comments_count || 0,
+        is_liked: likedPostIds.has(post.id),
+        is_bookmarked: bookmarkedPostIds.has(post.id)
+      }));
 
       return {
         posts: transformedPosts,
@@ -201,21 +214,41 @@ const postsQueryFunctions = {
   },
 
   /**
-   * Get explore posts
+   * Get explore posts - OPTIMIZED: uses RPC function
    */
   getExplorePosts: async (): Promise<Post[]> => {
-    const { data: posts, error } = await supabase
-      .from('posts')
-      .select(`
-        *,
-        profiles(username, avatar_url)
-      `)
-      .order('likes_count', { ascending: false })
-      .limit(30);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const currentUserId = user?.id || null;
 
-    if (error) throw error;
+      const { data: posts, error } = await supabase.rpc('get_explore_posts_optimized' as any, {
+        p_user_id: currentUserId,
+        p_limit: 30,
+        p_offset: 0
+      } as any);
 
-    return posts || [];
+      if (error) throw error;
+
+      return (posts || []) as Post[];
+    } catch (error) {
+      console.warn('⚠️ get_explore_posts_optimized RPC failed, falling back:', error);
+      
+      const { data: posts, error: fallbackError } = await supabase
+        .from('posts')
+        .select(`
+          *,
+          profiles(username, avatar_url)
+        `)
+        .order('likes_count', { ascending: false })
+        .limit(30);
+
+      if (fallbackError) throw fallbackError;
+
+      return (posts || []).map((p: any) => ({
+        ...p,
+        user: p.profiles || { username: 'Unknown', avatar_url: '' }
+      })) as Post[];
+    }
   },
 
   /**
@@ -317,8 +350,8 @@ const postsQueryFunctions = {
 
     try {
       // Call the smart feed function we created in the database
-      // Add a short timeout to avoid long waits; fallback to regular feed if slow
-      const RPC_TIMEOUT_MS = 2000;
+      // Increased timeout for mobile networks
+      const RPC_TIMEOUT_MS = 8000;
 
       let smartFeedData: any[] | null = null;
       let error: any = null;
@@ -384,17 +417,21 @@ const postsQueryFunctions = {
         last_viewed_at: post.last_viewed_at,
         engagement_score: post.engagement_score,
         smart_rank: post.smart_rank,
-        is_liked: false, // Will be populated by client-side logic below
-        is_bookmarked: false // Will be populated by client-side logic below
+        is_liked: post.is_liked !== undefined ? post.is_liked : false,
+        is_bookmarked: post.is_bookmarked !== undefined ? post.is_bookmarked : false
       })) || [];
 
-      // Client-side logic to populate is_liked and is_bookmarked fields
-      if (posts.length > 0 && user?.id) {
+      // Client-side logic to populate is_liked and is_bookmarked fields if they are missing
+      // (This ensures backward compatibility with older RPC versions while preparing for instant status)
+      const needsStatusCheck = posts.length > 0 && user?.id && 
+        (posts[0].is_liked === undefined || posts[0].is_liked === false); 
+
+      if (needsStatusCheck) {
         try {
           // Get post IDs for batch query
           const postIds = posts.map((p: any) => p.id);
           
-          // Batch query for likes and bookmarks
+          // Batch query for likes and bookmarks in parallel
           const [likesData, bookmarksData] = await Promise.all([
             supabase
               .from('likes')
@@ -414,12 +451,12 @@ const postsQueryFunctions = {
 
           // Update posts with actual like and bookmark status
           posts.forEach((post: any) => {
-            post.is_liked = likedPostIds.has(post.id);
-            post.is_bookmarked = bookmarkedPostIds.has(post.id);
+            // Only update if it was false/missing, to avoid overwriting if the RPC already returned true
+            if (!post.is_liked) post.is_liked = likedPostIds.has(post.id);
+            if (!post.is_bookmarked) post.is_bookmarked = bookmarkedPostIds.has(post.id);
           });
         } catch (__error) {
           console.error('Error fetching like/bookmark status for smart feed:', __error);
-          // Keep default false values if query fails
         }
       }
 
@@ -479,85 +516,39 @@ const postsMutationFunctions = {
   },
 
   /**
-   * Like/unlike a post
+   * Like/unlike a post - OPTIMIZED: uses atomic lightning RPC
    */
   togglePostLike: async (postId: string) => {
      const user = await authManager.getCurrentUser();
      if (!user) throw new Error('User not authenticated');
 
-    // Check if already liked
-    const { data: existingLike } = await supabase
-      .from('likes')
-      .select('id')
-      .eq('post_id', postId)
-      .eq('user_id', user.id)
-      .single();
+    // Use fast lightning RPC function instead of multiple API calls
+    const { data: isLiked, error } = await supabase.rpc('lightning_toggle_like_v4', {
+      post_id_param: postId,
+      user_id_param: user.id,
+    } as any);
 
-    if (existingLike) {
-      // Unlike
-      const { error } = await supabase
-        .from('likes')
-        .delete()
-        .eq('post_id', postId)
-        .eq('user_id', user.id);
+    if (error) throw error;
 
-      if (error) throw error;
-
-      return { liked: false };
-    } else {
-      // Like
-      const { error } = await (supabase
-        .from('likes') as any)
-        .insert({
-          post_id: postId,
-          user_id: user.id,
-        });
-
-      if (error) throw error;
-
-      return { liked: true };
-    }
+    return { liked: isLiked };
   },
 
   /**
-   * Bookmark/unbookmark a post
+   * Bookmark/unbookmark a post - OPTIMIZED: uses atomic lightning RPC
    */
   togglePostBookmark: async (postId: string) => {
      const user = await authManager.getCurrentUser();
      if (!user) throw new Error('User not authenticated');
 
-    // Check if already bookmarked
-    const { data: existingBookmark } = await supabase
-      .from('bookmarks')
-      .select('id')
-      .eq('post_id', postId)
-      .eq('user_id', user.id)
-      .single();
+    // Use fast lightning RPC function instead of multiple API calls
+    const { data: isBookmarked, error } = await supabase.rpc('lightning_toggle_bookmark_v3', {
+      post_id_param: postId,
+      user_id_param: user.id,
+    } as any);
 
-    if (existingBookmark) {
-      // Remove bookmark
-      const { error } = await supabase
-        .from('bookmarks')
-        .delete()
-        .eq('post_id', postId)
-        .eq('user_id', user.id);
+    if (error) throw error;
 
-      if (error) throw error;
-
-      return { bookmarked: false };
-    } else {
-      // Add bookmark
-      const { error } = await (supabase
-        .from('bookmarks') as any)
-        .insert({
-          post_id: postId,
-          user_id: user.id,
-        });
-
-      if (error) throw error;
-
-      return { bookmarked: true };
-    }
+    return { bookmarked: isBookmarked };
   },
 
   /**

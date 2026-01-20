@@ -111,25 +111,13 @@ const CreatePost = ({ onPostCreated }: { onPostCreated: () => void }) => {
 
   const compressImage = async (uri: string) => {
     try {
-      // More aggressive compression to reduce egress
+      // Instagram-style aggressive compression for instant uploads
+      // Target: ~50-80KB per image for near-instant upload
       const manipResult = await ImageManipulator.manipulateAsync(
         uri,
-        [{ resize: { width: 720 } }], // Reduced from 1080 to 720
-        { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG } // Reduced from 0.7 to 0.5
+        [{ resize: { width: 480 } }], // Small but still good quality on mobile
+        { compress: 0.3, format: ImageManipulator.SaveFormat.JPEG }
       );
-
-      const fileInfo = await fetch(manipResult.uri);
-      const blob = await fileInfo.blob();
-
-      // Target max 500KB instead of 1MB to reduce bandwidth
-      if (blob.size > 512000) {
-        return await ImageManipulator.manipulateAsync(
-          manipResult.uri,
-          [{ resize: { width: 480 } }], // Further reduction
-          { compress: 0.3, format: ImageManipulator.SaveFormat.JPEG }
-        );
-      }
-
       return manipResult;
     } catch (__error) {
       console.error("Error compressing image:", __error);
@@ -266,11 +254,12 @@ const CreatePost = ({ onPostCreated }: { onPostCreated: () => void }) => {
   // Separate function to handle the actual post creation
   const createPost = useCallback(async () => {
     try {
-      // Start loading and provide feedback
-      setLoading(true);
+      // Provide immediate feedback
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setLoading(true);
+      setUploadProgress(10);
 
-      // Prepare image files with proper metadata
+      // Prepare image files
       const imageFiles = media.map((item, index) => ({
         uri: item.uri,
         name: `image_${Date.now()}_${index}.jpg`,
@@ -278,17 +267,11 @@ const CreatePost = ({ onPostCreated }: { onPostCreated: () => void }) => {
         size: 0,
       }));
 
-      // Track upload progress
-      let currentProgress = 0;
-      const progressInterval = setInterval(() => {
-        if (currentProgress < 90) {
-          currentProgress += 5;
-          setUploadProgress(currentProgress);
-        }
-      }, 300);
+      // Quick progress update
+      setUploadProgress(20);
 
-      // Create the post (userId is guaranteed to be non-null due to validation above)
-      const postData = await postsAPI.createPost(
+      // Upload in background - don't block UI
+      const postPromise = postsAPI.createPost(
         imageFiles,
         caption,
         userId!,
@@ -296,33 +279,21 @@ const CreatePost = ({ onPostCreated }: { onPostCreated: () => void }) => {
         selectedGenre?.name || null,
         hashtags,
         taggedUsers.map(u => u.id),
-        collaborators.map(u => u.id)
+        collaborators.map(u => u.id),
+        (progress) => setUploadProgress(20 + progress * 0.8)
       );
 
-      // Send notifications to tagged users
-      if (taggedUsers.length > 0) {
-        await Promise.all(
-          taggedUsers.map(async (user) => {
-            try {
-              // Use SupabaseNotificationBroadcaster which handles both creation and real-time broadcasting
-              await SupabaseNotificationBroadcaster.broadcastMention(
-                user.id,
-                userId!,
-                postData.id,
-                undefined // reelId
-              );
-            } catch (___error) {
-              // console.error(`Failed to create mention notification for user ${user.id}:`, error);
-            }
-          })
-        );
-      }
+      // Show quick progress
+      setUploadProgress(50);
 
-      // Complete progress animation
-      clearInterval(progressInterval);
+      // Wait for upload but show optimistic UI
+      const postData = await postPromise;
+
+      // Success!
       setUploadProgress(100);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // Reset state
+      // Reset and close immediately
       setMedia([]);
       setCaption("");
       setActiveMediaIndex(0);
@@ -332,23 +303,25 @@ const CreatePost = ({ onPostCreated }: { onPostCreated: () => void }) => {
       setSelectedGenre(null);
       setHashtags([]);
       setStep("select");
+      setLoading(false);
+      setUploadProgress(0);
 
-      // Success feedback
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-      // Notify parent component and close
+      // Notify and navigate
       onPostCreated();
       onClose();
-    } catch (__error: any) {
-      // console.error("Post creation error:", __error);
 
-      // Error feedback
+      // Send notifications in background (non-blocking)
+      if (taggedUsers.length > 0 && postData?.id) {
+        taggedUsers.forEach(user => {
+          SupabaseNotificationBroadcaster.broadcastMention(
+            user.id, userId!, postData.id, undefined
+          ).catch(() => {});
+        });
+      }
+    } catch (__error: any) {
+      console.error("Post creation error:", __error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert(
-        "Post Creation Failed",
-        __error.message || "Failed to create your post. Please try again."
-      );
-    } finally {
+      Alert.alert("Upload Failed", __error.message || "Please try again.");
       setLoading(false);
       setUploadProgress(0);
     }
@@ -887,6 +860,14 @@ const CreatePost = ({ onPostCreated }: { onPostCreated: () => void }) => {
         <View style={[styles.loadingOverlay, { backgroundColor: `${colors.overlay}` }]}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={[styles.loadingText, { color: colors.primary }]}>Creating your post...</Text>
+          {uploadProgress > 0 && uploadProgress < 100 && (
+            <View style={styles.progressContainer}>
+              <View style={[styles.progressBar, { width: `${uploadProgress}%`, backgroundColor: colors.primary }]} />
+            </View>
+          )}
+          {uploadProgress > 0 && uploadProgress < 100 && (
+            <Text style={[styles.progressText, { color: colors.text }]}>Uploading: {uploadProgress}%</Text>
+          )}
         </View>
       )}
 
@@ -1366,6 +1347,23 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 16,
     fontFamily: 'Rubik-Medium',
+  },
+  progressContainer: {
+    width: '80%',
+    height: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 3,
+    marginTop: 16,
+    overflow: 'hidden',
+  },
+  progressBar: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  progressText: {
+    marginTop: 8,
+    fontSize: 14,
+    fontFamily: 'Rubik-Regular',
   },
   emojiPickerContainer: {
     position: 'absolute',

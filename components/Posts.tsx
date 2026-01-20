@@ -278,45 +278,55 @@ const Posts = () => {
   }, [user?.id, queryClient, posts]);
 
   // Track viewable items for prefetching and pagination
-  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
     if (viewableItems.length > 0 && viewableItems[0].index !== null) {
       const currentIndex = viewableItems[0].index;
       currentVisibleIndexRef.current = currentIndex;
       
       // **ZERO-SECOND LOADING**: Aggressively prefetch next posts IMMEDIATELY (no delay)
-      if (user?.id && posts) {
+      if (user?.id && postsRef.current) {
         const optimizer = getOptimizer(queryClient, user.id);
         // IMMEDIATE execution for zero-second loading
-        optimizer.prefetcher.prefetchNextPosts(currentIndex, posts);
+        optimizer.prefetcher.prefetchNextPosts(currentIndex, postsRef.current);
       }
 
-      // Instagram-style pagination: Load more when user crosses 75% (15 out of 20 posts)
-      // This ensures smooth infinite scroll
-      if (posts && posts.length > 0) {
-        const totalPosts = posts.length;
-        // Calculate if user has scrolled past 75% of loaded posts
+      // Instagram-style pagination: Load more when user crosses 75%
+      if (postsRef.current && postsRef.current.length > 0 && hasMoreRef.current && !loadingRef.current) {
+        const totalPosts = postsRef.current.length;
         const scrollPercentage = (currentIndex + 1) / totalPosts;
         
-        // Load next batch when user crosses 75% threshold
-        if (scrollPercentage >= 0.75 && hasMore && !loading) {
-          console.log(`📱 Loading more posts: Current index ${currentIndex + 1}/${totalPosts} (${Math.round(scrollPercentage * 100)}%)`);
+        if (scrollPercentage >= 0.75) {
+          // Trigger load more in background
+          loadMoreRef.current();
         }
       }
     }
-  }, [user?.id, queryClient, posts, hasMore, loading, loadMore]);
+  }).current;
+
+  // Keep refs updated for the stable callback
+  const postsRef = useRef(posts);
+  const hasMoreRef = useRef(hasMore);
+  const loadingRef = useRef(loading);
+  const loadMoreRef = useRef(loadMore);
+
+  useEffect(() => {
+    postsRef.current = posts;
+    hasMoreRef.current = hasMore;
+    loadingRef.current = loading;
+    loadMoreRef.current = loadMore;
+  }, [posts, hasMore, loading, loadMore]);
 
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 50,
     minimumViewTime: 500,
   }).current;
 
+  // Show skeleton loader on initial load
   if (loading && (!posts || posts.length === 0)) {
     return (
-      <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={[styles.loadingText, { color: colors.text }]}>
-          Loading smart feed...
-        </Text>
+      <View style={{ backgroundColor: colors.background, flex: 1 }}>
+        <StoriesFixed />
+        <FeedSkeleton numPosts={3} />
       </View>
     );
   }
@@ -335,16 +345,6 @@ const Posts = () => {
             Retry
           </Text>
         </TouchableOpacity>
-      </View>
-    );
-  }
-
-  // Show skeleton loader on initial load
-  if (loading && (!posts || posts.length === 0)) {
-    return (
-      <View style={{ backgroundColor: colors.background, flex: 1 }}>
-        <StoriesFixed />
-        <FeedSkeleton numPosts={3} />
       </View>
     );
   }

@@ -35,7 +35,12 @@ if (Platform.OS !== 'web') {
 }
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
-SplashScreen.preventAutoHideAsync();
+try {
+  SplashScreen.preventAutoHideAsync();
+} catch (e) {
+  // Ignore keep-awake errors in production builds
+  console.warn('SplashScreen.preventAutoHideAsync error:', e);
+}
 
 // Theme-aware Stack component
 function ThemedStack() {
