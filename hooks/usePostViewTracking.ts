@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useSelector } from 'react-redux';
+import { useAuth } from '@/lib/authContext';
 import { 
   PostViewTracker, 
   SmartFeedApi, 
@@ -200,7 +201,7 @@ export const useSmartFeed = (options: SmartFeedOptions = {}) => {
  * Hook for managing user sessions and view tracking lifecycle
  */
 export function useSessionManagement() {
-  const user = useSelector((state: any) => state.user);
+  const { user } = useAuth(); // Use auth context instead of Redux
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
 

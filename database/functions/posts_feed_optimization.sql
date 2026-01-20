@@ -23,9 +23,9 @@ BEGIN
             p.image_urls,
             p.created_at,
             p.updated_at,
-            -- Count aggregations (efficient with indexes)
-            COALESCE(l.likes_count, 0) as likes_count,
-            COALESCE(c.comments_count, 0) as comments_count,
+            -- Use cached columns for instant loading (fastest!)
+            COALESCE(p.likes_count, 0) as likes_count,
+            COALESCE(p.comments_count, 0) as comments_count,
             -- User interaction checks (only if user is logged in)
             CASE 
                 WHEN p_user_id IS NOT NULL THEN 
@@ -42,16 +42,6 @@ BEGIN
             prof.avatar_url
         FROM posts p
         LEFT JOIN profiles prof ON p.user_id = prof.id
-        LEFT JOIN LATERAL (
-            SELECT COUNT(*) as likes_count 
-            FROM likes 
-            WHERE post_id = p.id
-        ) l ON true
-        LEFT JOIN LATERAL (
-            SELECT COUNT(*) as comments_count 
-            FROM comments 
-            WHERE post_id = p.id
-        ) c ON true
         ORDER BY p.created_at DESC
         LIMIT p_limit
         OFFSET p_offset

@@ -56,17 +56,26 @@ export class InstagramPrefetcher {
           staleTime: Infinity,
         });
 
-        // Prefetch post comments for instant comment section
+        // Prefetch post comments for instant comment section using optimized RPC
         await this.queryClient.prefetchQuery({
           queryKey: ['post_comments', post.id, 20, 0],
           queryFn: async () => {
-            const { data } = await supabase
-              .from('comments')
-              .select('*, user:profiles!comments_user_id_fkey(username, avatar_url)')
-              .eq('post_id', post.id)
-              .order('created_at', { ascending: false })
-              .range(0, 19);
-            return data || [];
+            const { data, error } = await supabase.rpc('get_post_comments', {
+              p_post_id: post.id,
+              p_limit: 20,
+              p_offset: 0
+            } as any);
+            
+            if (error) throw error;
+            
+            // Transform to match local format
+            return ((data as any[]) || []).map((c: any) => ({
+              ...c,
+              user: {
+                username: c.username,
+                avatar_url: c.avatar_url
+              }
+            }));
           },
           staleTime: Infinity,
         });
@@ -238,7 +247,7 @@ export class InstagramPrefetcher {
   }
 
   /**
-   * Prefetch explore grid images
+   * Prefetch explore grid images - OPTIMIZED with RPC
    * Instagram: Cached explore content
    */
   async prefetchExplore() {
@@ -246,11 +255,13 @@ export class InstagramPrefetcher {
       this.queryClient.prefetchQuery({
         queryKey: queryKeys.posts.explore(),
         queryFn: async () => {
-          const { data } = await supabase
-            .from('posts')
-            .select('*, profiles(username, avatar_url)')
-            .order('likes_count', { ascending: false })
-            .limit(30);
+          const { data, error } = await supabase.rpc('get_explore_posts_optimized', {
+            p_user_id: this.userId,
+            p_limit: 30,
+            p_offset: 0
+          } as any);
+          
+          if (error) throw error;
           return data;
         },
         staleTime: 10 * 60 * 1000, // 10 minutes

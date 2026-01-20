@@ -31,39 +31,55 @@ export const reelsAPI = {
       }
       if (!user) throw new Error("User not authenticated");
 
-      // First, get the user's liked reels
-      const { data: likedReels } = await supabase
-        .from('reel_likes')
-        .select('reel_id')
-        .eq('user_id', user.id);
+      // OPTIMIZED: Use RPC function to get reels with like status in a single query
+      // This is much faster and ensures likes show up instantly
+      const { data, error: reelsError } = await supabase.rpc('get_user_reel_feed', {
+        p_user_id: user.id,
+        p_limit: limit,
+        p_offset: offset
+      } as any);
 
-      const userLikedReelIds = (likedReels as any)?.map((like: any) => like.reel_id) || [];
+      if (reelsError) {
+        console.warn('⚠️ get_user_reel_feed RPC failed, falling back to manual fetch:', reelsError.message);
+        
+        // Fallback to manual fetch if RPC fails
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from("reels")
+          .select(`
+            *,
+            user:profiles(username, avatar_url)
+          `)
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1);
 
-      // Then fetch the reels with profiles instead of users
-      const { data, error: reelsError } = await supabase
-        .from("reels")
-        .select(`
-          *,
-          user:profiles(username, avatar_url)
-        `)
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1);
+        if (fallbackError) throw new Error(`Failed to fetch reels: ${fallbackError.message}`);
+        
+        // For fallback, we need to populate is_liked manually
+        const { data: likedReels } = await supabase
+          .from('reel_likes')
+          .select('reel_id')
+          .eq('user_id', user.id);
+        
+        const userLikedReelIds = (likedReels as any)?.map((like: any) => like.reel_id) || [];
 
-      if (reelsError) throw new Error(`Failed to fetch reels: ${reelsError.message}`);
+        return (fallbackData || []).map((reel: any) => ({
+          ...reel,
+          is_liked: userLikedReelIds.includes(reel.id),
+          user: {
+            ...reel.user,
+            avatar: reel.user?.avatar_url || "https://via.placeholder.com/150"
+          }
+        })) as Reel[];
+      }
 
-      const reels = (data || []).map((reel: any) => ({
+      // Map RPC data to Reel interface
+      const reels = ((data as any[]) || []).map((reel: any) => ({
         ...reel,
-        is_liked: userLikedReelIds.includes(reel.id),
         user: {
-          ...reel.user,
-          avatar: reel.user?.avatar_url || "https://via.placeholder.com/150"
+          username: reel.username,
+          avatar: reel.avatar_url || "https://via.placeholder.com/150"
         }
       })) as Reel[];
-
-      const invalidReels = reels.filter((reel) => !reel.id || typeof reel.id !== "string");
-      if (invalidReels.length > 0) {
-// console.warn("Invalid reels in getReels:", invalidReels);
-      }
 
       return reels;
     } catch (__error: any) {

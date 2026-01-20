@@ -166,31 +166,35 @@ const Reels = () => {
     }
   }, [dispatch, loading, hasMore, reels.length]);
 
-  const onViewableItemsChanged = useCallback(
-    ({ viewableItems }: { viewableItems: ViewToken[] }) => {
-      if (viewableItems.length > 0) {
-        const visibleItem = viewableItems[0].item as Reel;
-        setVisibleReelId(visibleItem.id);
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    if (viewableItems.length > 0) {
+      const visibleItem = viewableItems[0].item as Reel;
+      setVisibleReelId(visibleItem.id);
+      
+      if (viewableItems[0].index !== null) {
+        currentIndexRef.current = viewableItems[0].index;
         
-        if (viewableItems[0].index !== null) {
-          currentIndexRef.current = viewableItems[0].index;
-          
-          // **ZERO-SECOND LOADING**: Prefetch next reels IMMEDIATELY (Instagram-style)
-          if (user?.id) {
-            const optimizer = getOptimizer(queryClient, user.id);
-            // IMMEDIATE execution for zero-second loading
-            optimizer.prefetcher.prefetchReels(viewableItems[0].index!, reels);
-          }
+        // **ZERO-SECOND LOADING**: Prefetch next reels IMMEDIATELY (Instagram-style)
+        if (user?.id) {
+          const optimizer = getOptimizer(queryClient, user.id);
+          // IMMEDIATE execution for zero-second loading
+          // Use the latest reels from a ref to keep this function stable
+          optimizer.prefetcher.prefetchReels(viewableItems[0].index!, reelsRef.current);
         }
       }
-    },
-    [reels, user?.id, queryClient]
-  );
+    }
+  }).current;
 
-  const viewabilityConfig = {
+  // Keep reelsRef updated
+  const reelsRef = useRef(reels);
+  useEffect(() => {
+    reelsRef.current = reels;
+  }, [reels]);
+
+  const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 80,
     minimumViewTime: 500,
-  };
+  }).current;
 
   const getItemLayout = useCallback(
     (_: any, index: number) => ({
